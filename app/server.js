@@ -8,7 +8,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { GeminiAdapter } from './lib/gateway.js';
+import crypto from 'node:crypto';
+import { PROVIDERS, createAdapter, scrubKey, friendlyError } from './lib/gateway.js';
 import * as CE from './lib/session.js';
 import * as KB from './lib/knowledge.js';
 import * as AD from './lib/advisor.js';
@@ -23,20 +24,42 @@ const CLOUD = process.env.CLOUD === '1' || !!process.env.RENDER;
 const HTTPS_PORT = Number(process.env.PORT || 8443);
 const HTTP_PORT = HTTPS_PORT + 1;
 
-// 共用金鑰部署時的簡易通行碼，避免網址外流後被陌生人消耗你的 API 額度
+// 選用的通行碼，可再加一層擋住不相干的人打開網址
 const ACCESS_CODE = (process.env.ACCESS_CODE || '').trim();
 
-// ── API Key ────────────────────────────────────────────────────
-function loadKey() {
-  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim();
-  // 本機開發用；這兩個檔案都在 .gitignore 內，不會進版控
-  for (const p of [path.join(DIR, 'key.txt'), path.join(DIR, '..', 'Gemini API Key.txt')]) {
-    if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8').trim();
-  }
-  throw new Error('找不到 Gemini API Key。請設定環境變數 GEMINI_API_KEY，或把金鑰存成 app/key.txt');
-}
+// ── 每位使用者用自己的金鑰 ─────────────────────────────────────
+// 金鑰只存在使用者瀏覽器，隨每次請求送來，伺服器不寫入磁碟、不寫進日誌。
+// 這裡只快取「已完成模型探測的 adapter 實例」，避免每次請求都重新探測。
+const adapters = new Map();
+const ADAPTER_TTL = 2 * 60 * 60 * 1000;
 
-const gw = new GeminiAdapter(loadKey());
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of adapters) if (now - v.touched > ADAPTER_TTL) adapters.delete(k);
+}, 10 * 60 * 1000).unref?.();
+
+const fingerprint = (provider, key) =>
+  provider + ':' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 24);
+
+async function getAdapter(provider, key) {
+  if (!provider || !key) {
+    const e = new Error('尚未設定 API 金鑰，請重新登入'); e.code = 401; throw e;
+  }
+  const id = fingerprint(provider, key);
+  const hit = adapters.get(id);
+  if (hit) { hit.touched = Date.now(); return hit.gw; }
+
+  const gw = createAdapter(provider, key);
+  try {
+    await gw.init();                     // 探測可用模型，順便驗證金鑰
+  } catch (err) {
+    const e = new Error(friendlyError(scrubKey(err.message, key), provider));
+    e.code = 401;                        // 金鑰有問題 → 讓前端回到登入畫面
+    throw e;
+  }
+  adapters.set(id, { gw, touched: Date.now() });
+  return gw;
+}
 
 // ── 靜態檔 ──────────────────────────────────────────────────────
 const MIME = {
@@ -88,17 +111,34 @@ async function api(req, res, route) {
   const body = req.method === 'POST' ? await readBody(req) : {};
 
   if (route === '/api/health') {
-    return json(res, 200, { ok: true, model: gw.fast, judge: gw.judge, sessions: CE.sessionCount(), auth: !!ACCESS_CODE });
+    return json(res, 200, {
+      ok: true, sessions: CE.sessionCount(), auth: !!ACCESS_CODE,
+      providers: Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, {
+        label: v.label, note: v.note, hint: v.hint, url: v.url, file: !!v.file, verified: !!v.verified,
+      }])),
+    });
   }
 
   if (route === '/api/auth') {
     return json(res, 200, { ok: !ACCESS_CODE || body.code === ACCESS_CODE });
   }
 
-  // 其餘 API 一律需要通行碼（未設定 ACCESS_CODE 時等於不啟用）
+  // 通行碼（未設定 ACCESS_CODE 時等於不啟用）
   if (ACCESS_CODE && req.headers['x-access-code'] !== ACCESS_CODE) {
     return json(res, 401, { error: '通行碼錯誤或已失效，請重新輸入' });
   }
+
+  const provider = req.headers['x-ai-provider'];
+  const apiKey = req.headers['x-ai-key'];
+
+  // 登入：實際打一次該供應商的 API 驗證金鑰，順便回報偵測到的模型
+  if (route === '/api/login') {
+    const gw = await getAdapter(body.provider, body.key);
+    return json(res, 200, { ok: true, provider: body.provider, fast: gw.fast, judge: gw.judge, file: gw.supportsFile });
+  }
+
+  // 其餘 API 一律使用呼叫者自己的金鑰
+  const gw = await getAdapter(provider, apiKey);
 
   // ── 功能一：客戶潛在痛點分析 ──
   if (route === '/api/analyze/pain') {
@@ -185,16 +225,21 @@ async function handler(req, res) {
   try {
     await api(req, res, route);
   } catch (e) {
-    const code = e.code === 404 ? 404 : 500;
-    console.error(`[api] ${route} → ${e.message}`);
-    // 對使用者不顯示技術錯誤（規格 §77）
-    json(res, code, { error: code === 404 ? '這次練習的連線已經逾時，請重新開始。' : '剛剛好像卡了一下，請再試一次。', detail: e.message });
+    const code = e.code === 401 ? 401 : e.code === 404 ? 404 : 500;
+    // 錯誤訊息不得回吐金鑰
+    const safe = friendlyError(scrubKey(e.message, req.headers['x-ai-key']), req.headers['x-ai-provider']);
+    console.error(`[api] ${route} → ${safe.slice(0, 200)}`);
+    const msg = code === 401 ? safe
+      : code === 404 ? '這次練習的連線已經逾時，請重新開始。'
+        : /金鑰|額度|權限|不支援|連不上|服務商/.test(safe) ? safe
+          : '剛剛好像卡了一下，請再試一次。';
+    json(res, code, { error: msg });
   }
 }
 
 // ── 啟動 ───────────────────────────────────────────────────────
-const models = await gw.init();
-console.log(`Model Gateway → roleplay: ${models.fast} ／ judge: ${models.judge}`);
+console.log(`可用 AI 服務商：${Object.values(PROVIDERS).map(p => p.label).join('、')}`);
+console.log('每位使用者需在登入畫面輸入自己的 API 金鑰');
 if (ACCESS_CODE) console.log('已啟用通行碼保護');
 
 if (CLOUD) {

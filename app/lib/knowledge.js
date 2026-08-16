@@ -56,6 +56,9 @@ export async function ingest(gw, { name, kind, base64 }) {
   // 1) 取得可送進模型的內容
   let text = null, file = null;
   if (e === 'pdf') {
+    if (!gw.supportsFile) {
+      throw new Error('你目前使用的 AI 服務商無法直接讀取 PDF。請改上傳 .docx／.pptx／.txt，或改用 Google Gemini 或 Anthropic Claude 的金鑰。');
+    }
     file = { mime: 'application/pdf', data: base64 };
   } else if (e === 'docx' || e === 'pptx') {
     text = officeText(buf, name).slice(0, MAX_TEXT);
@@ -108,8 +111,9 @@ export async function ingest(gw, { name, kind, base64 }) {
 // ── 取得查詢時要附帶的原文（理賠判斷要求高準確度，值得回送原始檔）──
 const SOURCE_LIMIT = 6 * 1024 * 1024;
 
-export function sourceFor(doc) {
+export function sourceFor(doc, gw) {
   if (doc.text) return { text: doc.text.slice(0, 120_000), file: null };
+  if (!gw?.supportsFile) return { text: null, file: null };   // 換了不支援 PDF 的供應商 → 只用摘要
   try {
     const p = path.join(FILES, doc.file);
     if (fs.statSync(p).size <= SOURCE_LIMIT) {

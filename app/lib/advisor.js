@@ -30,7 +30,7 @@ export async function painPoints(gw, { gender, age, background }) {
 
 // ── 功能五：理賠諮詢建議 ────────────────────────────────────────
 export async function claimAdvice(gw, doc, { question, history }) {
-  const src = sourceFor(doc);
+  const src = sourceFor(doc, gw);
   const prompt = P.claimPrompt({ digest: doc.digest, source: src.text, question, history });
   const out = await jsonCall(
     gw, prompt, { max: 12000, file: src.file },
@@ -46,11 +46,10 @@ export async function claimAdvice(gw, doc, { question, history }) {
 export async function coachChat(gw, { history, message }) {
   const c = checkCompliance(message);
 
-  // 轉成 Gemini 的多輪格式，只留最近 12 則
-  const hist = (history || []).slice(-12).map(m => ({
-    role: m.role === 'user' ? 'user' : 'model',
-    parts: [{ text: m.text }],
-  }));
+  // 中性的多輪格式，由各家 adapter 自行轉換；只留最近 12 則
+  const hist = (history || []).slice(-12)
+    .filter(m => m?.text)
+    .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.text }));
 
   const note = c.level === 'high'
     ? `\n\n【系統偵測】業務員的訊息可能涉及違規（${c.hits.map(h => h.type).join('、')}）。請在回覆的第一段就直接指出風險與正確做法，再回答他的問題。`

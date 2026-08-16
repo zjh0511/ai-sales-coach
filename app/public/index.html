@@ -12,6 +12,33 @@
 </head>
 <body>
 
+<!-- 登入：選擇 AI 服務商並輸入自己的金鑰 -->
+<section id="s-login" class="screen">
+  <div class="pad scroll">
+    <h1 class="brand">AI業務教練</h1>
+    <p class="sub">豪老師 Hao+</p>
+
+    <label>選擇你的 AI 服務商</label>
+    <select id="lg-provider"></select>
+    <p class="note" id="lg-note"></p>
+
+    <label>貼上你的 API 金鑰</label>
+    <input id="lg-key" type="password" inputmode="text" autocomplete="off"
+           autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在此貼上金鑰">
+    <label class="inline"><input type="checkbox" id="lg-show"> 顯示金鑰</label>
+    <p class="note">還沒有金鑰？<a id="lg-link" href="#" target="_blank" rel="noopener">前往申請</a>（多數服務商有免費額度）</p>
+
+    <div class="card sm">
+      <p class="note" style="margin:0">
+        金鑰只儲存在<b>你自己這支手機的瀏覽器</b>，不會存到伺服器，也不會與其他人共用。
+        所有 AI 用量都算在你自己的帳號上。共用裝置請記得使用完登出。
+      </p>
+    </div>
+    <p class="note" id="lg-msg"></p>
+  </div>
+  <div class="foot"><button class="btn primary" id="lg-go">驗證並登入</button></div>
+</section>
+
 <!-- 首次啟動：合規提醒 -->
 <section id="s-welcome" class="screen">
   <div class="pad">
@@ -43,6 +70,7 @@
       <button class="link" data-go="docs">我的文件</button>
       <button class="link" data-go="history">我的訓練紀錄</button>
     </div>
+    <p class="note" id="home-acct"></p>
   </div>
 </section>
 

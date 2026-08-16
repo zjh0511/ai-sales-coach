@@ -39,42 +39,127 @@ function toast(msg, ms = 2800) {
 }
 
 // ── API ────────────────────────────────────────────────────
-// 共用金鑰部署時，伺服器會要求通行碼；本機自己跑則不會啟用。
+// 每次請求都帶上使用者自己的金鑰；金鑰只存在這台裝置的瀏覽器。
 const CODE_KEY = 'aicoach.code';
+const PROV_KEY = 'aicoach.provider';
+const AKEY_KEY = 'aicoach.apikey';
 
-async function api(path, body, retried = false) {
+const cred = () => ({ provider: localStorage.getItem(PROV_KEY), key: localStorage.getItem(AKEY_KEY) });
+
+async function api(path, body) {
   const code = localStorage.getItem(CODE_KEY);
+  const { provider, key } = cred();
   const r = await fetch('/api' + path, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(code ? { 'x-access-code': code } : {}) },
+    headers: {
+      'content-type': 'application/json',
+      ...(code ? { 'x-access-code': code } : {}),
+      ...(provider && key ? { 'x-ai-provider': provider, 'x-ai-key': key } : {}),
+    },
     body: JSON.stringify(body || {}),
   });
-  if (r.status === 401 && !retried) {          // 通行碼被改掉或過期 → 重問一次
-    localStorage.removeItem(CODE_KEY);
-    await ensureAuth();
-    return api(path, body, true);
-  }
   const j = await r.json().catch(() => ({ error: '連線失敗' }));
+  if (r.status === 401) {
+    logout(j.error || '請重新登入');
+    // 標記為認證錯誤，讓呼叫端不要再切換畫面（否則會蓋掉登入頁）
+    const err = new Error(j.error || '請重新登入'); err.auth = true; throw err;
+  }
   if (!r.ok) throw new Error(j.error || '發生錯誤');
   return j;
 }
 
-async function ensureAuth() {
+// ── 登入畫面 ────────────────────────────────────────────────
+let PROVIDERS = {};
+
+async function initLogin() {
   const h = await fetch('/api/health').then(r => r.json()).catch(() => ({}));
-  if (!h.auth) return;                          // 沒啟用通行碼
-  for (;;) {
-    const code = localStorage.getItem(CODE_KEY);
-    if (code) {
-      const ok = await fetch('/api/auth', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }),
-      }).then(r => r.json()).then(j => j.ok).catch(() => false);
-      if (ok) return;
-      localStorage.removeItem(CODE_KEY);
+  PROVIDERS = h.providers || {};
+
+  // 部署方若另外設了通行碼，先過這一關
+  if (h.auth) {
+    while (true) {
+      const code = localStorage.getItem(CODE_KEY);
+      if (code) {
+        const ok = await fetch('/api/auth', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }),
+        }).then(r => r.json()).then(j => j.ok).catch(() => false);
+        if (ok) break;
+        localStorage.removeItem(CODE_KEY);
+      }
+      const input = prompt('請輸入團隊通行碼');
+      if (input === null) return show('login');
+      localStorage.setItem(CODE_KEY, input.trim());
     }
-    const input = prompt('請輸入團隊通行碼');
-    if (input === null) { toast('需要通行碼才能使用'); return; }
-    localStorage.setItem(CODE_KEY, input.trim());
   }
+
+  const sel = $('#lg-provider');
+  sel.innerHTML = '';
+  for (const [k, p] of Object.entries(PROVIDERS)) {
+    const o = el('option', null, p.label + (p.verified ? '（已實測）' : ''));
+    o.value = k;
+    sel.append(o);
+  }
+  sel.value = localStorage.getItem(PROV_KEY) || Object.keys(PROVIDERS)[0] || 'gemini';
+  syncProvider();
+
+  const { provider, key } = cred();
+  if (provider && key) return show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
+  show('login');
+}
+
+function syncProvider() {
+  const p = PROVIDERS[$('#lg-provider').value] || {};
+  $('#lg-note').textContent = [p.note, p.hint ? `金鑰${p.hint}` : '', p.file ? '' : '（此服務商無法直接讀取 PDF）']
+    .filter(Boolean).join('　·　');
+  $('#lg-link').href = p.url || '#';
+}
+$('#lg-provider').onchange = syncProvider;
+$('#lg-show').onchange = e => { $('#lg-key').type = e.target.checked ? 'text' : 'password'; };
+
+$('#lg-go').onclick = async () => {
+  const provider = $('#lg-provider').value;
+  const key = $('#lg-key').value.trim();
+  const msg = $('#lg-msg');
+  if (!key) { msg.className = 'note err'; msg.textContent = '請先貼上金鑰'; return; }
+
+  const btn = $('#lg-go'); btn.disabled = true; btn.textContent = '驗證中…';
+  msg.className = 'note'; msg.textContent = '正在向服務商確認金鑰…';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(localStorage.getItem(CODE_KEY) ? { 'x-access-code': localStorage.getItem(CODE_KEY) } : {}) },
+      body: JSON.stringify({ provider, key }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || '驗證失敗');
+    localStorage.setItem(PROV_KEY, provider);
+    localStorage.setItem(AKEY_KEY, key);
+    $('#lg-key').value = '';
+    msg.className = 'note ok'; msg.textContent = `已連線：${j.fast}`;
+    updateAccount();
+    show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
+  } catch (e) {
+    msg.className = 'note err'; msg.textContent = e.message;
+  }
+  btn.disabled = false; btn.textContent = '驗證並登入';
+};
+
+function updateAccount() {
+  const { provider } = cred();
+  const n = $('#home-acct'); n.innerHTML = '';
+  if (!provider) return;
+  n.append(document.createTextNode(`AI 服務商：${PROVIDERS[provider]?.label || provider}　`));
+  const out = el('button', 'link', '登出／更換金鑰');
+  out.style.cssText = 'width:auto;display:inline;padding:0';
+  out.onclick = () => { if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout(); };
+  n.append(out);
+}
+
+function logout(reason) {
+  abort();
+  localStorage.removeItem(AKEY_KEY);
+  if (reason) { $('#lg-msg').className = 'note err'; $('#lg-msg').textContent = reason; }
+  show('login');
 }
 
 const busy = (msg, on = true) => { $('#wait-msg').textContent = msg; if (on) show('wait'); };
@@ -126,7 +211,7 @@ $('#btn-go').onclick = async () => {
   if (S.fn === 'pain') {
     busy('正在分析這位客戶可能的痛點…');
     try { renderPain(await api('/analyze/pain', customer)); show('pain'); }
-    catch (e) { toast(e.message); show('intake'); }
+    catch (e) { if (e.auth) return; toast(e.message); show('intake'); }
     return;
   }
 
@@ -146,7 +231,7 @@ $('#btn-go').onclick = async () => {
     $('#b-oc').textContent = '客戶：' + (d.demo?.objection_handling?.customer || '');
     $('#b-oy').textContent = '你：' + (d.demo?.objection_handling?.you || '');
     show('brief');
-  } catch (e) { toast(e.message); show('intake'); }
+  } catch (e) { if (e.auth) return; toast(e.message); show('intake'); }
 };
 
 // ── 功能一：痛點分析結果 ────────────────────────────────────
@@ -334,7 +419,9 @@ async function submit(text) {
     if (d.ended) { S.ended = true; setStatus('這次談話結束了'); setTimeout(finish, 900); }
     else nextTurn();
   } catch (e) {
-    S.busy = false; setStatus(''); toast(e.message);
+    S.busy = false; setStatus('');
+    if (e.auth) { S.sessionId = null; return; }
+    toast(e.message);
     if (/逾時/.test(e.message)) { S.sessionId = null; show('home'); }
   }
 }
@@ -348,7 +435,7 @@ async function finish() {
   try {
     const fb = await api('/session/end', { sessionId: id });
     renderFeedback(fb); saveHistory(fb); show('fb');
-  } catch (e) { toast(e.message); show('home'); }
+  } catch (e) { if (e.auth) return; toast(e.message); show('home'); }
 }
 
 function abort() {
@@ -574,6 +661,5 @@ function renderHistory() {
 
 // ── 啟動 ────────────────────────────────────────────────────
 $('#btn-welcome').onclick = () => { localStorage.setItem('aicoach.seen', '1'); show('home'); };
-show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
 window.addEventListener('pagehide', abort);
-ensureAuth();
+initLogin().then(updateAccount);
