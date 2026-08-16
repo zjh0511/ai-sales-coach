@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="manifest.webmanifest">
+<title>AI業務教練｜豪老師 Hao+</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 首次啟動：合規提醒 -->
+<section id="s-welcome" class="screen">
+  <div class="pad">
+    <h1 class="brand">AI業務教練</h1>
+    <p class="sub">豪老師 Hao+</p>
+    <div class="card warn">
+      <p>歡迎使用 <b>AI業務教練</b>。</p>
+      <p>提醒：生成內容僅供自學參考，請勿公開分享。</p>
+      <p class="hi">⚠️ 業務員網路言行不得涉及招攬保險或招募行為 ⚠️</p>
+    </div>
+    <p class="note">本工具為訓練用途，不提供法律、稅務或財務建議，也不會產生真實客戶資料。請勿輸入客戶真實姓名、電話或身分證號。</p>
+  </div>
+  <div class="foot"><button class="btn primary" id="btn-welcome">我了解，開始使用</button></div>
+</section>
+
+<!-- 首頁 -->
+<section id="s-home" class="screen">
+  <div class="pad scroll">
+    <h1 class="brand">AI業務教練</h1>
+    <p class="sub">豪老師 Hao+</p>
+    <h2 class="ask">今天想做什麼？</h2>
+    <button class="tile" data-fn="pain"><span class="t-ico">🎯</span><span><b>客戶潛在痛點分析</b><small>輸入客戶背景，找出三個可能的切入點</small></span></button>
+    <button class="tile" data-fn="call"><span class="t-ico">📞</span><span><b>電話邀約語音對練</b><small>AI 扮演客戶，跟你真的講一通電話</small></span></button>
+    <button class="tile" data-fn="needs"><span class="t-ico">🔍</span><span><b>發掘需求角色扮演</b><small>練習用提問挖出客戶沒說出口的需求</small></span></button>
+    <button class="tile" data-fn="product"><span class="t-ico">📊</span><span><b>商品行銷語音演練</b><small>上傳公司教材，針對商品做行銷演練</small></span></button>
+    <button class="tile" data-fn="claim"><span class="t-ico">🏥</span><span><b>客戶理賠諮詢建議</b><small>上傳保單條款，查詢可能的理賠項目</small></span></button>
+    <button class="tile" data-fn="chat"><span class="t-ico">💬</span><span><b>客戶行銷諮詢建議</b><small>跟教練聊你手上真實的客戶狀況</small></span></button>
+    <div class="two-links">
+      <button class="link" data-go="docs">我的文件</button>
+      <button class="link" data-go="history">我的訓練紀錄</button>
+    </div>
+  </div>
+</section>
+
+<!-- 客戶資料（痛點分析／三種角色扮演共用） -->
+<section id="s-intake" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span id="i-title">設定客戶</span></header>
+  <div class="pad scroll">
+    <div class="card sm" id="i-product" hidden><h4>本次演練商品</h4><p id="i-product-name"></p></div>
+    <div id="i-ctx-wrap">
+      <label id="i-ctx-label">這通電話的情境<small>決定你這時候「合理知道客戶什麼」，示範話術會照著設計</small></label>
+      <div class="chips" id="f-ctx">
+        <button class="chip on" data-v="cold">陌生開發</button>
+        <button class="chip" data-v="referral">客戶轉介紹</button>
+        <button class="chip" data-v="warm">緣故</button>
+        <button class="chip" data-v="existing">既有客戶服務</button>
+        <button class="chip" data-v="followup">之前談過沒成交</button>
+        <button class="chip" data-v="event">活動後追蹤</button>
+      </div>
+      <input id="f-ctxnote" type="text" placeholder="補充說明（選填），例如：王大哥介紹的，說他同事最近生小孩">
+    </div>
+    <label>客戶性別</label>
+    <div class="chips" id="f-gender"><button class="chip on" data-v="男">男</button><button class="chip" data-v="女">女</button></div>
+    <label>客戶年齡</label>
+    <input id="f-age" type="text" placeholder="例如：約 45 歲" value="約 45 歲">
+    <label>客戶背景<small>行業、家庭狀況，想到什麼就寫什麼</small></label>
+    <textarea id="f-bg" rows="4" placeholder="例如：科技業主管，已婚有兩個小孩，工作很忙，之前買過保險但不太清楚內容"></textarea>
+    <div id="i-diff-wrap">
+      <label>難度</label>
+      <div class="chips" id="f-diff">
+        <button class="chip" data-v="1">1 友善</button><button class="chip on" data-v="2">2 一般</button>
+        <button class="chip" data-v="3">3 挑戰</button><button class="chip" data-v="4">4 高難度</button><button class="chip" data-v="5">5 實戰</button>
+      </div>
+    </div>
+    <p class="note">請勿輸入真實姓名、電話、身分證號等個人資料。</p>
+  </div>
+  <div class="foot"><button class="btn primary" id="btn-go">下一步</button></div>
+</section>
+
+<!-- 功能一：痛點分析結果 -->
+<section id="s-pain" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span>客戶潛在痛點分析</span></header>
+  <div class="pad scroll" id="pain-body"></div>
+  <div class="foot two">
+    <button class="btn" data-go="intake">換個客戶</button>
+    <button class="btn primary" id="btn-pain2call">用這位客戶練邀約</button>
+  </div>
+</section>
+
+<!-- 文件管理／挑選 -->
+<section id="s-docs" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span id="d-title">我的文件</span></header>
+  <div class="pad scroll" id="doc-body"></div>
+  <div class="foot">
+    <input type="file" id="f-file" accept=".pdf,.docx,.pptx,.txt,.md" hidden>
+    <button class="btn primary" id="btn-upload">上傳文件</button>
+    <p class="note" id="d-hint">支援 PDF、Word（.docx）、PowerPoint（.pptx）、純文字，單檔 18MB 以內。</p>
+  </div>
+</section>
+
+<!-- 演練前準備 -->
+<section id="s-brief" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span id="b-title">演練前準備</span></header>
+  <div class="pad scroll">
+    <div class="card"><h3 id="b-name"></h3><p id="b-summary" class="muted"></p></div>
+    <div class="card"><h4>這次的訓練目標</h4><p id="b-obj"></p></div>
+    <div class="card demo">
+      <h4>示範話術（參考用，不是標準答案）</h4>
+      <p class="lbl">開場</p><p id="b-open"></p>
+      <p class="lbl">關鍵問題</p><p id="b-q"></p>
+      <p class="lbl">遇到拒絕時</p><p class="quote" id="b-oc"></p><p id="b-oy"></p>
+    </div>
+    <p class="note">演練過程中 AI 只會扮演客戶，不會教學或評分。結束後才會給你回饋。</p>
+  </div>
+  <div class="foot"><button class="btn primary" id="btn-start">開始演練</button></div>
+</section>
+
+<!-- 語音演練 -->
+<section id="s-play" class="screen">
+  <header class="bar">
+    <span id="p-name" class="who"></span>
+    <span class="spacer"></span>
+    <span id="p-found" class="badge" hidden></span>
+    <button class="end" id="btn-end">結束練習</button>
+  </header>
+  <div id="p-log" class="log scroll"></div>
+  <div id="p-status" class="status">準備中…</div>
+  <div class="foot mic-foot">
+    <button class="mic" id="btn-mic"><span id="mic-ico">🎙️</span></button>
+    <div class="alt">
+      <input id="p-text" type="text" placeholder="也可以打字…" autocomplete="off">
+      <button class="btn sm" id="btn-send">送出</button>
+    </div>
+  </div>
+</section>
+
+<!-- 分析中 -->
+<section id="s-wait" class="screen center">
+  <div class="spin"></div>
+  <p id="wait-msg">正在分析你剛才的表現…</p>
+</section>
+
+<!-- 回饋 -->
+<section id="s-fb" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span>教練回饋</span></header>
+  <div class="pad scroll" id="fb-body"></div>
+  <div class="foot two">
+    <button class="btn" data-go="home">回首頁</button>
+    <button class="btn primary" id="btn-again">再練一次</button>
+  </div>
+</section>
+
+<!-- 功能五：理賠諮詢 -->
+<section id="s-claim" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span id="c-title">理賠諮詢</span><span class="spacer"></span><button class="end" data-go="docs-policy">換條款</button></header>
+  <div id="c-log" class="log scroll"></div>
+  <div class="foot">
+    <div class="alt">
+      <input id="c-text" type="text" placeholder="描述客戶的狀況…" autocomplete="off">
+      <button class="btn sm" id="c-send">送出</button>
+    </div>
+    <p class="note">依條款所做的初步判斷，實際理賠以保險公司核定為準。</p>
+  </div>
+</section>
+
+<!-- 功能六：行銷諮詢 -->
+<section id="s-chat" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span>客戶行銷諮詢</span><span class="spacer"></span><button class="end" id="chat-clear">清除</button></header>
+  <div id="ch-log" class="log scroll"></div>
+  <div class="foot">
+    <div class="alt">
+      <input id="ch-text" type="text" placeholder="說說你遇到的客戶狀況…" autocomplete="off">
+      <button class="btn sm" id="ch-send">送出</button>
+    </div>
+  </div>
+</section>
+
+<!-- 紀錄 -->
+<section id="s-history" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span>我的訓練紀錄</span></header>
+  <div class="pad scroll" id="h-body"></div>
+</section>
+
+<div id="toast"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
