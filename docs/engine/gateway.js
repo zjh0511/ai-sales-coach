@@ -69,7 +69,7 @@ class Base {
     this.all = [];                       // 這把金鑰可用的全部模型 [{id,label}]
     this.autoFast = []; this.autoJudge = [];
     this.fastList = []; this.judgeList = [];
-    this.pinned = { fast: null, judge: null };
+    this.pinned = null;                  // 使用者指定的單一模型；null = 自動
     this.cooldown = new Map();
     this.onEvent = null;                 // 降階／額度用盡時通知 UI
   }
@@ -78,7 +78,8 @@ class Base {
   get supportsFile() { return !!PROVIDERS[this.provider]?.file; }
 
   _rank(models) {
-    this.all = models.map(m => (typeof m === 'string' ? { id: m, label: m } : m));
+    this.all = models.map(m => (typeof m === 'string' ? { id: m, label: m } : m))
+      .map(m => ({ ...m, free: !!m.free }));
     const ids = this.all.map(m => m.id);
     const p = PICK[this.provider] || { fast: [/./], judge: [/./] };
     const by = pats => {
@@ -91,17 +92,17 @@ class Base {
     this._apply();
   }
 
-  // 指定模型後，該模型排第一；其餘仍作為額度用盡時的降階順位
+  // 指定模型後，該模型排第一；其餘仍作為額度用盡時的降階順位。
+  // 自動模式下，角色扮演與評分仍各自挑最適合的（快 vs 準），使用者不必知道這層細節。
   _apply() {
     const ids = this.all.map(m => m.id);
-    const chain = (pick, auto) => [...new Set([pick, ...auto, ...ids].filter(Boolean))].slice(0, 6);
-    this.fastList = chain(this.pinned.fast, this.autoFast);
-    this.judgeList = chain(this.pinned.judge, this.autoJudge);
+    const chain = auto => [...new Set([this.pinned, ...auto, ...ids].filter(Boolean))].slice(0, 6);
+    this.fastList = chain(this.autoFast);
+    this.judgeList = chain(this.autoJudge);
   }
 
-  pin({ fast, judge }) {
-    const ids = this.all.map(m => m.id);
-    this.pinned = { fast: ids.includes(fast) ? fast : null, judge: ids.includes(judge) ? judge : null };
+  pin(model) {
+    this.pinned = this.all.some(m => m.id === model) ? model : null;
     this._apply();
     return this.status();
   }
@@ -116,7 +117,7 @@ class Base {
     return {
       provider: this.provider,
       models: this.all,
-      rank: { fast: this.autoFast, judge: this.autoJudge },   // 推薦順位，供 UI 排序與標記
+      recommended: [...new Set([...this.autoFast, ...this.autoJudge])],
       pinned: this.pinned,
       auto: { fast: this.autoFast[0], judge: this.autoJudge[0] },
       active: { fast: live(this.fastList), judge: live(this.judgeList) },
@@ -236,7 +237,13 @@ class OpenAICompatAdapter extends Base {
   async init() {
     const j = await this._fetch(`${this.base}/models`, { headers: this._headers });
     const names = (j.data || [])
-      .map(m => ({ id: m.id, label: m.name || m.id }))
+      .map(m => ({
+        id: m.id,
+        label: m.name || m.id,
+        // 以服務商回報的實際價格判定免費，比只看名稱可靠
+        free: /:free$/.test(m.id)
+          || (m.pricing && Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0),
+      }))
       // :batch 是非同步批次介面，不能用在即時對話；其餘為非文字模型
       .filter(m => !/embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcribe|:batch/.test(m.id));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');

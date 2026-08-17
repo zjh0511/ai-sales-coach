@@ -58,7 +58,7 @@ export async function api(path, body = {}) {
 
       // 模型清單與指定（不指定就維持自動）
       case '/models/status': return need().status();
-      case '/models/set': return need().pin({ fast: body.fast || null, judge: body.judge || null });
+      case '/models/set': return need().pin(body.model || null);
 
       // 功能一：客戶潛在痛點分析
       case '/analyze/pain':

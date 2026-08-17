@@ -147,16 +147,23 @@ async function updateAccount() {
   if (!provider) return;
 
   $('#acct-provider').textContent = PROVIDERS[provider]?.label || provider;
-  $('#acct-fast').textContent = '演練模型　載入中…';
-  $('#acct-judge').textContent = '評分模型　載入中…';
+  $('#acct-fast').textContent = '載入中…';
+  $('#acct-judge').textContent = '';
   try {
     const st = await api('/models/status');
-    const tag = kind => (st.pinned[kind] ? '' : '（自動）');
-    $('#acct-fast').textContent = `演練模型　${st.active.fast || '—'}${tag('fast')}`;
-    $('#acct-judge').textContent = `評分模型　${st.active.judge || '—'}${tag('judge')}`;
+    if (st.pinned) {
+      $('#acct-fast').textContent = `模型　${st.pinned}`;
+      $('#acct-judge').textContent = '';
+    } else if (st.active.fast === st.active.judge) {
+      $('#acct-fast').textContent = `模型　${st.active.fast || '—'}（自動）`;
+      $('#acct-judge').textContent = '';
+    } else {
+      $('#acct-fast').textContent = `模型　${st.active.fast || '—'}（自動）`;
+      $('#acct-judge').textContent = `分析時改用　${st.active.judge}`;
+    }
   } catch {
-    $('#acct-fast').textContent = '演練模型　—';
-    $('#acct-judge').textContent = '評分模型　—';
+    $('#acct-fast').textContent = '模型　—';
+    $('#acct-judge').textContent = '';
   }
 }
 
@@ -166,8 +173,22 @@ $('#home-logout').onclick = () => {
 
 // ── 模型設定 ────────────────────────────────────────────────
 const PIN_KEY = 'aicoach.models';
-const loadPin = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY)) || {}; } catch { return {}; } };
 let modelFilter = '';
+
+// 指定的模型；null 代表自動。舊版存的是 {fast,judge} 物件，這裡順便遷移
+function loadPin() {
+  try {
+    const v = JSON.parse(localStorage.getItem(PIN_KEY));
+    if (typeof v === 'string') return v;
+    if (v && typeof v === 'object') {          // 舊的 {fast,judge} 格式 → 就地正規化
+      const one = v.fast || v.judge || null;
+      savePin(one);
+      return one;
+    }
+  } catch { /* 格式壞掉就當沒設定 */ }
+  return null;
+}
+const savePin = m => m ? localStorage.setItem(PIN_KEY, JSON.stringify(m)) : localStorage.removeItem(PIN_KEY);
 
 async function renderModels() {
   const b = $('#m-body'); b.innerHTML = '';
@@ -177,10 +198,10 @@ async function renderModels() {
   const cooling = new Map(st.cooling.map(c => [c.id, c.minutes]));
 
   b.append(el('p', 'note',
-    '「自動」會挑選延遲與品質最平衡的模型。若指定的模型額度用盡，系統仍會自動降階到下一個可用模型，'
-    + '十分鐘後再回頭嘗試原本的模型，練習不會中斷。'));
+    '不確定選哪個就用「自動」。若模型額度用盡，系統會自動改用下一個可用模型，'
+    + '十分鐘後再回頭嘗試，練習不會中斷。'));
 
-  // OpenRouter 有 400 多個模型，沒有搜尋根本找不到
+  // OpenRouter 有 300 多個模型，沒有搜尋根本找不到
   if (st.models.length > 30) {
     const f = el('input');
     f.id = 'm-filter'; f.type = 'search'; f.placeholder = `搜尋模型（共 ${st.models.length} 個）`;
@@ -189,67 +210,64 @@ async function renderModels() {
     b.append(f);
   }
 
-  const section = (title, hint, kind) => {
-    const c = el('div', 'card');
-    c.append(el('h4', null, title), el('p', 'note', hint));
-
-    const pick = async id => {
-      const cur = loadPin();
-      cur[kind] = id;
-      localStorage.setItem(PIN_KEY, JSON.stringify(cur));
-      await api('/models/set', { fast: cur.fast || null, judge: cur.judge || null });
-      toast(id ? `已指定 ${id}` : '已改為自動選擇');
-      renderModels();
-    };
-
-    const row = (id, label, extra) => {
-      const on = st.pinned[kind] === id || (!st.pinned[kind] && id === null);
-      const r = el('button', 'doc' + (on ? ' on' : ''));
-      r.style.cssText = 'width:100%;text-align:left;font:inherit;color:inherit';
-      const info = el('div', 'info');
-      info.append(el('b', null, (on ? '● ' : '○ ') + label));
-      if (extra) info.append(el('small', null, extra));
-      r.append(info);
-      if (st.active[kind] === id) r.append(el('span', 'badge', '使用中'));
-      r.onclick = () => pick(id);
-      return r;
-    };
-
-    c.append(row(null, '自動（推薦）', `目前會選 ${st.auto[kind] || '—'}`));
-
-    // 推薦順位排前面，其餘按名稱排序——原始模型代號隨機排列沒人選得下去
-    const rank = st.rank[kind] || [];
-    const q = modelFilter.trim().toLowerCase();
-    let sorted = st.models
-      .filter(m => !q || m.id.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q))
-      .sort((a, b) => {
-        const ra = rank.indexOf(a.id), rb = rank.indexOf(b.id);
-        if (ra !== rb) return (ra < 0 ? 999 : ra) - (rb < 0 ? 999 : rb);
-        return a.id.localeCompare(b.id);
-      });
-
-    // 沒搜尋時不要一次塞幾百列，DOM 會很慢
-    const LIMIT = 30;
-    const hidden = Math.max(0, sorted.length - LIMIT);
-    if (!q && hidden) sorted = sorted.slice(0, LIMIT);
-
-    for (const m of sorted) {
-      const cd = cooling.get(m.id);
-      c.append(row(m.id, m.id, [
-        rank.includes(m.id) ? '★ 推薦' : null,
-        /:free$/.test(m.id) ? '免費' : null,
-        m.label !== m.id ? m.label : null,
-        cd ? `⚠️ 額度用盡，約 ${cd} 分鐘後恢復` : null,
-      ].filter(Boolean).join('　·　')));
-    }
-    if (hidden) c.append(el('p', 'note', `另有 ${hidden} 個模型未顯示，請用上方搜尋框尋找。`));
-    if (q && !sorted.length) c.append(el('p', 'note', '找不到符合的模型。'));
-    return c;
+  const pick = async id => {
+    savePin(id);
+    await api('/models/set', { model: id });
+    toast(id ? `已改用 ${id}` : '已改為自動選擇');
+    renderModels();
   };
 
-  b.append(section('角色扮演模型', '客戶回話用的模型。這裡最重要的是「快」，客戶只講 1～3 句，小模型就夠。', 'fast'));
-  b.append(section('評分與分析模型', '五項評分、教練回饋、痛點分析、理賠查詢用的模型。這裡重「準」，可以慢一點。', 'judge'));
-  b.append(el('p', 'note', `共偵測到 ${st.models.length} 個可用模型。清單來自你的金鑰實際查詢結果，不同帳號可能不同。`));
+  const row = (id, label, extra) => {
+    const on = st.pinned === id;                      // id 為 null 時代表「自動」
+    const r = el('button', 'doc' + (on ? ' on' : ''));
+    r.style.cssText = 'width:100%;text-align:left;font:inherit;color:inherit';
+    const info = el('div', 'info');
+    info.append(el('b', null, (on ? '● ' : '○ ') + label));
+    if (extra) info.append(el('small', null, extra));
+    r.append(info);
+    if (on) r.append(el('span', 'badge', '使用中'));
+    r.onclick = () => pick(id);
+    return r;
+  };
+
+  const c = el('div', 'card');
+  c.append(el('h4', null, '選擇模型'));
+  const auto = st.auto.fast === st.auto.judge
+    ? `目前會用 ${st.auto.fast || '—'}`
+    : `演練用 ${st.auto.fast || '—'}，評分用 ${st.auto.judge || '—'}`;
+  c.append(row(null, '自動（推薦）', auto));
+
+  // 推薦的排前面，其餘按名稱排序——原始模型代號隨機排列沒人選得下去
+  const rec = st.recommended || [];
+  const q = modelFilter.trim().toLowerCase();
+  let sorted = st.models
+    .filter(m => !q || m.id.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q))
+    .sort((a, b) => {
+      const ra = rec.indexOf(a.id), rb = rec.indexOf(b.id);
+      if (ra !== rb) return (ra < 0 ? 999 : ra) - (rb < 0 ? 999 : rb);
+      return a.id.localeCompare(b.id);
+    });
+
+  // 沒搜尋時不要一次塞幾百列，DOM 會很慢
+  const LIMIT = 30;
+  const hidden = Math.max(0, sorted.length - LIMIT);
+  if (!q && hidden) sorted = sorted.slice(0, LIMIT);
+
+  for (const m of sorted) {
+    const cd = cooling.get(m.id);
+    c.append(row(m.id, m.id + (m.free ? ' (Free)' : ''), [
+      rec.includes(m.id) ? '★ 推薦' : null,
+      m.label !== m.id ? m.label : null,
+      cd ? `⚠️ 額度用盡，約 ${cd} 分鐘後恢復` : null,
+    ].filter(Boolean).join('　·　')));
+  }
+  if (hidden) c.append(el('p', 'note', `另有 ${hidden} 個模型未顯示，請用上方搜尋框尋找。`));
+  if (q && !sorted.length) c.append(el('p', 'note', '找不到符合的模型。'));
+  b.append(c);
+
+  b.append(el('p', 'note',
+    `共偵測到 ${st.models.length} 個可用模型，清單來自你的金鑰實際查詢結果。`
+    + '標「(Free)」的是免費模型，不會產生費用，但速度與中文品質通常較差。'));
   b.scrollTop = 0;
 }
 
