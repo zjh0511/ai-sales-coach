@@ -9,8 +9,10 @@ import * as AD from './advisor.js';
 
 let gw = null;                 // 目前登入的模型連線
 let current = { provider: null, key: null };
+let onEvent = null;            // 降階／額度事件通知 UI
 
 export const providers = () => PROVIDERS;
+export const onModelEvent = fn => { onEvent = fn; if (gw) gw.onEvent = fn; };
 
 function need() {
   if (!gw) { const e = new Error('尚未設定 API 金鑰，請重新登入'); e.auth = true; throw e; }
@@ -26,15 +28,20 @@ async function connect(provider, key) {
     e.auth = true;
     throw e;
   }
+  a.onEvent = onEvent;
   gw = a;
   current = { provider, key };
   return a;
 }
 
 // 重新整理頁面後用已存的金鑰靜默恢復連線
-export async function restore(provider, key) {
+export async function restore(provider, key, pin) {
   if (!provider || !key) return false;
-  try { await connect(provider, key); return true; } catch { return false; }
+  try {
+    const a = await connect(provider, key);
+    if (pin) a.pin(pin);
+    return true;
+  } catch { return false; }
 }
 
 export const isReady = () => !!gw;
@@ -45,8 +52,13 @@ export async function api(path, body = {}) {
     switch (path) {
       case '/login': {
         const a = await connect(body.provider, body.key);
+        if (body.pin) a.pin(body.pin);          // 沿用上次選定的模型
         return { ok: true, provider: body.provider, fast: a.fast, judge: a.judge, file: a.supportsFile };
       }
+
+      // 模型清單與指定（不指定就維持自動）
+      case '/models/status': return need().status();
+      case '/models/set': return need().pin({ fast: body.fast || null, judge: body.judge || null });
 
       // 功能一：客戶潛在痛點分析
       case '/analyze/pain':

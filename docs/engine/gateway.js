@@ -60,22 +60,62 @@ class Base {
   constructor(provider, key) {
     this.provider = provider;
     this.key = key;
+    this.all = [];                       // 這把金鑰可用的全部模型 [{id,label}]
+    this.autoFast = []; this.autoJudge = [];
     this.fastList = []; this.judgeList = [];
+    this.pinned = { fast: null, judge: null };
     this.cooldown = new Map();
+    this.onEvent = null;                 // 降階／額度用盡時通知 UI
   }
   get fast() { return this.fastList[0]; }
   get judge() { return this.judgeList[0]; }
   get supportsFile() { return !!PROVIDERS[this.provider]?.file; }
 
   _rank(models) {
+    this.all = models.map(m => (typeof m === 'string' ? { id: m, label: m } : m));
+    const ids = this.all.map(m => m.id);
     const p = PICK[this.provider] || { fast: [/./], judge: [/./] };
     const by = pats => {
       const out = [];
-      for (const re of pats) for (const m of models) if (re.test(m) && !out.includes(m)) out.push(m);
-      return out.length ? out.slice(0, 5) : models.slice(0, 3);
+      for (const re of pats) for (const m of ids) if (re.test(m) && !out.includes(m)) out.push(m);
+      return out.length ? out.slice(0, 5) : ids.slice(0, 3);
     };
-    this.fastList = by(p.fast);
-    this.judgeList = by(p.judge);
+    this.autoFast = by(p.fast);
+    this.autoJudge = by(p.judge);
+    this._apply();
+  }
+
+  // 指定模型後，該模型排第一；其餘仍作為額度用盡時的降階順位
+  _apply() {
+    const ids = this.all.map(m => m.id);
+    const chain = (pick, auto) => [...new Set([pick, ...auto, ...ids].filter(Boolean))].slice(0, 6);
+    this.fastList = chain(this.pinned.fast, this.autoFast);
+    this.judgeList = chain(this.pinned.judge, this.autoJudge);
+  }
+
+  pin({ fast, judge }) {
+    const ids = this.all.map(m => m.id);
+    this.pinned = { fast: ids.includes(fast) ? fast : null, judge: ids.includes(judge) ? judge : null };
+    this._apply();
+    return this.status();
+  }
+
+  // 給 UI 顯示：目前用哪個、指定了哪個、哪些正在冷卻
+  status() {
+    const now = Date.now();
+    const cooling = [...this.cooldown.entries()]
+      .filter(([, t]) => t > now)
+      .map(([id, t]) => ({ id, minutes: Math.ceil((t - now) / 60000) }));
+    const live = list => list.find(m => (this.cooldown.get(m) || 0) < now) || list[0];
+    return {
+      provider: this.provider,
+      models: this.all,
+      rank: { fast: this.autoFast, judge: this.autoJudge },   // 推薦順位，供 UI 排序與標記
+      pinned: this.pinned,
+      auto: { fast: this.autoFast[0], judge: this.autoJudge[0] },
+      active: { fast: live(this.fastList), judge: live(this.judgeList) },
+      cooling,
+    };
   }
 
   async generate(text, opts = {}) {
@@ -84,16 +124,21 @@ class Base {
 
     const now = Date.now();
     const usable = list.filter(m => (this.cooldown.get(m) || 0) < now);
+    const chain = usable.length ? usable : list;
     let last;
-    for (const model of (usable.length ? usable : list)) {
+    for (const model of chain) {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          return await this._call(model, text, opts);
+          const r = await this._call(model, text, opts);
+          // 不是第一順位卻成功 → 告訴使用者現在正在用備援模型
+          if (model !== list[0]) this.onEvent?.({ type: 'fallback', from: list[0], to: model });
+          return r;
         } catch (e) {
           last = e;
           if (!RETRYABLE.test(e.message)) throw e;          // 非暫時性錯誤直接拋出
           if (/\b429\b/.test(e.message)) {                   // 額度用盡，重試無意義
             this.cooldown.set(model, Date.now() + COOLDOWN_MS);
+            this.onEvent?.({ type: 'quota', model, minutes: COOLDOWN_MS / 60000 });
             console.warn(`[gateway] ${model} 額度用盡，暫停使用 ${COOLDOWN_MS / 60000} 分鐘`);
             break;
           }
@@ -125,8 +170,8 @@ export class GeminiAdapter extends Base {
     const j = await this._fetch(`${G_HOST}/models?pageSize=200`, { headers: { 'x-goog-api-key': this.key } });
     const names = (j.models || [])
       .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-      .map(m => m.name.replace('models/', ''))
-      .filter(m => !/tts|image|embedding|robotics|computer-use|lyria|deep-research/.test(m));
+      .map(m => ({ id: m.name.replace('models/', ''), label: m.displayName || m.name.replace('models/', '') }))
+      .filter(m => !/tts|image|embedding|robotics|computer-use|lyria|deep-research/.test(m.id));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');
     this._rank(names);
     return { fast: this.fast, judge: this.judge };
@@ -184,8 +229,9 @@ class OpenAICompatAdapter extends Base {
 
   async init() {
     const j = await this._fetch(`${this.base}/models`, { headers: this._headers });
-    const names = (j.data || []).map(m => m.id)
-      .filter(m => !/embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcribe/.test(m));
+    const names = (j.data || [])
+      .map(m => ({ id: m.id, label: m.name || m.id }))
+      .filter(m => !/embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcribe/.test(m.id));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');
     this._rank(names);
     return { fast: this.fast, judge: this.judge };
@@ -240,7 +286,7 @@ class AnthropicAdapter extends Base {
 
   async init() {
     const j = await this._fetch(`${A_HOST}/models?limit=100`, { headers: this._headers });
-    const names = (j.data || []).map(m => m.id);
+    const names = (j.data || []).map(m => ({ id: m.id, label: m.display_name || m.id }));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');
     this._rank(names);
     return { fast: this.fast, judge: this.judge };

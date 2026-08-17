@@ -1,5 +1,5 @@
 import { Voice, supported } from './voice.js';
-import { api, providers, restore } from './engine/api.js';
+import { api, providers, restore, onModelEvent } from './engine/api.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
@@ -21,6 +21,7 @@ function show(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === 's-' + name));
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
+  if (name === 'models') renderModels();
 }
 
 document.addEventListener('click', e => {
@@ -69,7 +70,7 @@ async function initLogin() {
   const { provider, key } = cred();
   if (provider && key) {
     $('#lg-msg').textContent = '正在恢復上次的連線…';
-    if (await restore(provider, key)) {
+    if (await restore(provider, key, loadPin())) {
       return show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
     }
     localStorage.removeItem(AKEY_KEY);
@@ -97,7 +98,9 @@ $('#lg-go').onclick = async () => {
   const btn = $('#lg-go'); btn.disabled = true; btn.textContent = '驗證中…';
   msg.className = 'note'; msg.textContent = '正在向服務商確認金鑰…';
   try {
-    const j = await api('/login', { provider, key });
+    // 換服務商時舊的模型指定不再適用，清掉
+    if (localStorage.getItem(PROV_KEY) !== provider) localStorage.removeItem(PIN_KEY);
+    const j = await api('/login', { provider, key, pin: loadPin() });
     localStorage.setItem(PROV_KEY, provider);
     localStorage.setItem(AKEY_KEY, key);
     $('#lg-key').value = '';
@@ -115,10 +118,85 @@ function updateAccount() {
   const n = $('#home-acct'); n.innerHTML = '';
   if (!provider) return;
   n.append(document.createTextNode(`AI 服務商：${PROVIDERS[provider]?.label || provider}　`));
-  const out = el('button', 'link', '登出／更換金鑰');
-  out.style.cssText = 'width:auto;display:inline;padding:0';
-  out.onclick = () => { if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout(); };
-  n.append(out);
+  const inline = (txt, fn) => {
+    const b = el('button', 'link', txt);
+    b.style.cssText = 'width:auto;display:inline;padding:0';
+    b.onclick = fn;
+    return b;
+  };
+  n.append(inline('模型設定', () => show('models')));
+  n.append(document.createTextNode('　'));
+  n.append(inline('登出／更換金鑰', () => {
+    if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout();
+  }));
+}
+
+// ── 模型設定 ────────────────────────────────────────────────
+const PIN_KEY = 'aicoach.models';
+const loadPin = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY)) || {}; } catch { return {}; } };
+
+async function renderModels() {
+  const b = $('#m-body'); b.innerHTML = '';
+  let st;
+  try { st = await api('/models/status'); } catch (e) { return void b.append(el('p', 'note', e.message)); }
+
+  const cooling = new Map(st.cooling.map(c => [c.id, c.minutes]));
+
+  b.append(el('p', 'note',
+    '「自動」會挑選延遲與品質最平衡的模型。若指定的模型額度用盡，系統仍會自動降階到下一個可用模型，'
+    + '十分鐘後再回頭嘗試原本的模型，練習不會中斷。'));
+
+  const section = (title, hint, kind) => {
+    const c = el('div', 'card');
+    c.append(el('h4', null, title), el('p', 'note', hint));
+
+    const pick = async id => {
+      const cur = loadPin();
+      cur[kind] = id;
+      localStorage.setItem(PIN_KEY, JSON.stringify(cur));
+      await api('/models/set', { fast: cur.fast || null, judge: cur.judge || null });
+      toast(id ? `已指定 ${id}` : '已改為自動選擇');
+      renderModels();
+    };
+
+    const row = (id, label, extra) => {
+      const on = st.pinned[kind] === id || (!st.pinned[kind] && id === null);
+      const r = el('button', 'doc' + (on ? ' on' : ''));
+      r.style.cssText = 'width:100%;text-align:left;font:inherit;color:inherit';
+      const info = el('div', 'info');
+      info.append(el('b', null, (on ? '● ' : '○ ') + label));
+      if (extra) info.append(el('small', null, extra));
+      r.append(info);
+      if (st.active[kind] === id) r.append(el('span', 'badge', '使用中'));
+      r.onclick = () => pick(id);
+      return r;
+    };
+
+    c.append(row(null, '自動（推薦）', `目前會選 ${st.auto[kind] || '—'}`));
+
+    // 推薦順位排前面，其餘按名稱排序——20 個原始模型代號隨機排列沒人選得下去
+    const rank = st.rank[kind] || [];
+    const sorted = [...st.models].sort((a, b) => {
+      const ra = rank.indexOf(a.id), rb = rank.indexOf(b.id);
+      if (ra !== rb) return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
+      return a.id.localeCompare(b.id);
+    });
+
+    for (const m of sorted) {
+      const cd = cooling.get(m.id);
+      c.append(row(m.id, m.id, [
+        rank.includes(m.id) ? '★ 推薦' : null,
+        m.label !== m.id ? m.label : null,
+        cd ? `⚠️ 額度用盡，約 ${cd} 分鐘後恢復` : null,
+      ].filter(Boolean).join('　·　')));
+    }
+    return c;
+  };
+
+  b.append(section('角色扮演模型', '客戶回話用的模型。這裡最重要的是「快」，客戶只講 1～3 句，小模型就夠。', 'fast'));
+  b.append(section('評分與分析模型', '五項評分、教練回饋、痛點分析、理賠查詢用的模型。這裡重「準」，可以慢一點。', 'judge'));
+  b.append(el('p', 'note', `共偵測到 ${st.models.length} 個可用模型。清單來自你的金鑰實際查詢結果，不同帳號可能不同。`));
+  b.scrollTop = 0;
 }
 
 function logout(reason) {
@@ -628,4 +706,14 @@ function renderHistory() {
 // ── 啟動 ────────────────────────────────────────────────────
 $('#btn-welcome').onclick = () => { localStorage.setItem('aicoach.seen', '1'); show('home'); };
 window.addEventListener('pagehide', abort);
+
+// 額度用盡自動降階時，讓使用者知道發生了什麼，而不是默默變慢或變差
+let lastEvt = 0;
+onModelEvent(e => {
+  if (Date.now() - lastEvt < 8000) return;          // 同一波事件不要洗版
+  lastEvt = Date.now();
+  if (e.type === 'quota') toast(`${e.model} 額度用盡，已自動改用備援模型（約 ${e.minutes} 分鐘後回頭嘗試）`, 5000);
+  else if (e.type === 'fallback') toast(`目前改用 ${e.to}`, 3000);
+});
+
 initLogin().then(updateAccount);
