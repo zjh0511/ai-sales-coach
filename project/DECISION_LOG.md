@@ -227,3 +227,38 @@ OpenAI、Groq、OpenRouter、DeepSeek 走同一套 OpenAI 相容介面。
 
 **PDF 限制：** 只有 Gemini 與 Anthropic 能直接讀 PDF。
 其餘服務商上傳 PDF 會得到明確的錯誤訊息與替代建議，而不是失敗得不明不白。
+
+---
+
+## 2026-08-17｜D015 移除伺服器，改為 GitHub Pages 純前端
+
+**決策：** 拿掉 `server.js`，把整個 Coach Engine 搬進瀏覽器，
+由瀏覽器直接呼叫 AI 服務商，網站放 GitHub Pages。
+
+**為什麼：** Render 免費方案 15 分鐘沒人用就休眠，下一位使用者要等 30～60 秒。
+對「讓業務員願意天天練」的產品來說，這個等待是致命傷。
+
+**為什麼現在可以拿掉伺服器：** 原本伺服器存在的兩個理由都已消失——
+1. 保護核心 IP（規格 §36）→ repo 已於 D011 後改為公開，提示詞本來就看得到。
+2. 保護 API 金鑰 → D014 改為使用者自帶金鑰後，伺服器端沒有秘密可藏。
+
+**實測前提：** 各家 API 的 CORS 支援（2026-08-17 實測）
+Gemini ✅、OpenAI ✅、Groq ✅；Anthropic 需 `anthropic-dangerous-direct-browser-access` 標頭。
+
+**技術移轉：**
+・`docx.js` 的 `zlib.inflateRawSync` → `DecompressionStream('deflate-raw')`，
+　Node 18+ 與瀏覽器都有，同一份程式碼兩邊都能跑（實測同一份 PPTX 結果完全一致，瀏覽器 17ms）。
+・Node `Buffer` 的 readUInt32LE 等 → `DataView` + `TextDecoder`。
+・文件儲存從伺服器檔案系統 → IndexedDB（`store.js`；Node 下自動退回記憶體版，
+　讓 `tools/selftest.mjs` 仍可執行）。
+・新增 `engine/api.js`，保留與伺服器版**完全相同的呼叫介面**，
+　UI 層幾乎不需修改，日後若要切回伺服器架構也只換這一層。
+
+**取捨：**
+・失去：文件無法團隊共用，每個人要自己上傳教材。
+・換得：無冷啟動、永久免費、更快（少一跳）、文件永久保留在自己裝置、
+　對話不經過任何第三方伺服器、沒有伺服器要維護。
+
+**注意事項：** `getDoc()` 因 IndexedDB 而變成非同步，所有呼叫端都必須加 `await`。
+移轉時自我測試第 5 節就是因為漏掉一個 `await` 而失敗——拿到 Promise 當成文件用，
+理賠查詢變成「條款查不到」。這類錯誤不會拋例外，只會安靜地給出錯誤答案，值得記一筆。

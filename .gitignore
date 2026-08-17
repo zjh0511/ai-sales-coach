@@ -5,17 +5,16 @@ Gemini API Key.txt
 *.key
 .env
 .env.*
-app/key.txt
-
-# 本機產生物
-app/certs/
-app/data/
-node_modules/
-*.log
+key.txt
 
 # 原始 Custom GPT 的完整指令（文件內自載明「嚴禁透漏」，故不進版控）
-# 其內容已重新工程化為 app/lib/prompts.js
+# 其內容已重新工程化為 docs/engine/prompts.js
 AI業務教練GPT完整提示詞.txt
+
+# 本機產生物
+certs/
+node_modules/
+*.log
 
 # 公司內部教材（如需分享請另行確認可公開性）
 *.pptx

@@ -3,17 +3,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GeminiAdapter } from '../lib/gateway.js';
-import * as CE from '../lib/session.js';
-import * as KB from '../lib/knowledge.js';
-import * as AD from '../lib/advisor.js';
-import { checkCompliance } from '../lib/compliance.js';
-import { officeText } from '../lib/docx.js';
-import { scrubBrands } from '../lib/prompts.js';
+import { GeminiAdapter } from '../docs/engine/gateway.js';
+import * as CE from '../docs/engine/session.js';
+import * as KB from '../docs/engine/knowledge.js';
+import * as AD from '../docs/engine/advisor.js';
+import { checkCompliance } from '../docs/engine/compliance.js';
+import { officeText } from '../docs/engine/docx.js';
+import { scrubBrands } from '../docs/engine/prompts.js';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const key = process.env.GEMINI_API_KEY
-  || fs.readFileSync(path.join(DIR, '..', 'Gemini API Key.txt'), 'utf8').trim();
+  || fs.readFileSync(path.join(DIR, 'Gemini API Key.txt'), 'utf8').trim();
 
 const ONLY = process.argv[2];                       // 例：node tools/selftest.mjs 5  只跑第 5 節
 const run = n => !ONLY || ONLY === String(n);
@@ -46,9 +46,9 @@ if (run(1)) {
   for (const [i, o] of cases) ok(scrubBrands(i) === o, `「${i.slice(0, 16)}…」`, scrubBrands(i));
 
   console.log('\n=== 1c. Office 文件解析（零外部相依）===');
-  const pptx = path.join(DIR, '..', '【AiCoach】AI業務教練.pptx');
+  const pptx = path.join(DIR, '【AiCoach】AI業務教練.pptx');
   if (fs.existsSync(pptx)) {
-    const txt = officeText(fs.readFileSync(pptx), 'x.pptx');
+    const txt = await officeText(new Uint8Array(fs.readFileSync(pptx)), 'x.pptx');
     ok(txt.length > 300, `PPTX 取字 ${txt.length} 字`);
     ok((txt.match(/【第 \d+ 頁】/g) || []).length >= 10, `分頁正確 ${(txt.match(/【第 \d+ 頁】/g) || []).length} 頁`);
   } else console.log('  --  找不到範例 PPTX，略過');
@@ -129,7 +129,7 @@ if (run(3)) {
 // ── 3b. 接觸情境：示範話術不得洩漏業務員不可能知道的資訊 ──────
 if (run(3)) {
   console.log('\n=== 3b. 邀約情境 → 示範話術的資訊邊界 ===');
-  const { demoLeaksPrivateInfo } = await import('../lib/prompts.js');
+  const { demoLeaksPrivateInfo } = await import('../docs/engine/prompts.js');
 
   // 先驗規則本身（不呼叫模型）
   const bad = { opening: '林阿姨您好', key_question: '您那筆五百萬的保單放了好幾年了，原來的業務員都沒跟您做過保單健檢嗎？' };
@@ -160,12 +160,12 @@ if (run(3)) {
 let productDoc = null;
 if (run(4)) {
   console.log('\n=== 4. 功能四：商品教材解析 → 商品行銷演練 ===');
-  const pptx = path.join(DIR, '..', '【AiCoach】AI業務教練.pptx');
+  const pptx = path.join(DIR, '【AiCoach】AI業務教練.pptx');
   if (fs.existsSync(pptx)) {
     let t0 = t();
     const up = await KB.ingest(gw, { name: 'AI業務教練.pptx', kind: 'product', base64: fs.readFileSync(pptx).toString('base64') });
     perf.ingest = t() - t0;
-    productDoc = KB.getDoc(up.id);
+    productDoc = await KB.getDoc(up.id);
     ok(!!up.title, `教材解析完成 ${perf.ingest}ms`, up.title);
     ok(up.digest?.selling_points?.length > 0, `整理出 ${up.digest.selling_points.length} 個 FABE 賣點`);
     ok(Array.isArray(up.digest?.missing), '有標示教材未載明的部分');
@@ -243,7 +243,7 @@ if (run(5)) {
     base64: Buffer.from(policy, 'utf8').toString('base64'),
   });
   perf.policyIngest = t() - t0;
-  const doc = KB.getDoc(up.id);
+  const doc = await KB.getDoc(up.id);
   ok(!!up.title, `條款解析完成 ${perf.policyIngest}ms`, up.title);
   ok(up.digest?.benefits?.length >= 4, `窮舉出 ${up.digest.benefits?.length} 個給付項目`);
   ok(up.digest?.exclusions?.length >= 4, `列出 ${up.digest.exclusions?.length} 項除外責任`);
@@ -268,8 +268,8 @@ if (run(5)) {
   ok(/美容|除外|不賠|不負給付|查不到|未載明/.test(txt), '對除外／未載明項目不亂賠');
   console.log(`        近視雷射：${(a2.unlikely?.[0]?.why || a2.likely?.[0]?.why || '').slice(0, 80)}`);
 
-  KB.deleteDoc(doc.id);
-  ok(!KB.getDoc(doc.id), '測試用條款已刪除');
+  await KB.deleteDoc(doc.id);
+  ok(!await KB.getDoc(doc.id), '測試用條款已刪除');
 }
 
 // ── 6. 功能六：行銷諮詢對話 ────────────────────────────────────

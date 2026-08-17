@@ -1,12 +1,12 @@
 {
   "name": "ai-sales-coach",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "AI業務教練 — 豪老師 Hao+（網頁測試版）",
+  "description": "AI業務教練 — 豪老師 Hao+（純前端，無伺服器）",
   "scripts": {
     "cert": "node tools/gencert.mjs",
-    "start": "node server.js",
+    "start": "node tools/serve.mjs",
     "check": "node tools/selftest.mjs"
   }
 }

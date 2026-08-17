@@ -2,55 +2,44 @@
 // 依規格 §41：Ingestion → Knowledge Structuring → Retrieval → Coaching。
 //
 // 解析策略（零外部相依）：
-//   .docx / .pptx  → 本機 ZIP+XML 取字（lib/docx.js）
+//   .docx / .pptx  → 瀏覽器內解 ZIP+XML 取字（engine/docx.js）
 //   .pdf           → 交給模型原生讀取（中文與掃描版都比自寫解析器可靠）
 //   .txt / .md     → 直接讀
+//
+// 所有文件都存在使用者自己裝置的 IndexedDB，不會上傳到任何伺服器。
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { officeText } from './docx.js';
 import { parseJson } from './gateway.js';
 import { digestPrompt } from './prompts.js';
+import { allDocs, putDoc, delDoc, getDocById } from './store.js';
 
-const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
-const INDEX = path.join(DIR, 'docs.json');
-const FILES = path.join(DIR, 'files');
-fs.mkdirSync(FILES, { recursive: true });
-
-const MAX_BYTES = 18 * 1024 * 1024;   // Gemini inline 上限約 20MB，留餘裕
-const MAX_TEXT = 300_000;             // 取字後的上限，避免超長文件塞爆 context
-
-let docs = [];
-try { docs = JSON.parse(fs.readFileSync(INDEX, 'utf8')); } catch { docs = []; }
-const save = () => fs.writeFileSync(INDEX, JSON.stringify(docs, null, 1));
+const MAX_BYTES = 18 * 1024 * 1024;
+const MAX_TEXT = 300_000;
+const SOURCE_LIMIT = 6 * 1024 * 1024;
 
 const ext = n => (n.split('.').pop() || '').toLowerCase();
 const newId = () => Math.random().toString(36).slice(2, 10);
 
-export function listDocs(kind) {
+export async function listDocs(kind) {
+  const docs = await allDocs();
   return docs
     .filter(d => !kind || d.kind === kind)
     .map(({ id, name, kind, title, at, chars, pages }) => ({ id, name, kind, title, at, chars, pages }))
     .sort((a, b) => b.at - a.at);
 }
 
-export const getDoc = id => docs.find(d => d.id === id);
+export const getDoc = id => getDocById(id);
+export const deleteDoc = id => delDoc(id);
 
-export function deleteDoc(id) {
-  const i = docs.findIndex(d => d.id === id);
-  if (i < 0) return false;
-  try { if (docs[i].file) fs.unlinkSync(path.join(FILES, docs[i].file)); } catch { /* 已不存在 */ }
-  docs.splice(i, 1); save();
-  return true;
-}
+// base64 ↔ bytes（不經過 Node Buffer，瀏覽器也能用）
+const b64ToBytes = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
 // ── 上傳並建立知識庫 ────────────────────────────────────────────
 export async function ingest(gw, { name, kind, base64 }) {
-  const buf = Buffer.from(base64, 'base64');
+  const bytes = b64ToBytes(base64);
   const e = ext(name);
 
-  if (buf.length > MAX_BYTES) throw new Error(`檔案 ${(buf.length / 1048576).toFixed(1)}MB 超過上限 18MB，請壓縮或分割後再上傳`);
+  if (bytes.length > MAX_BYTES) throw new Error(`檔案 ${(bytes.length / 1048576).toFixed(1)}MB 超過上限 18MB，請壓縮或分割後再上傳`);
   if (e === 'doc' || e === 'ppt' || e === 'xls') throw new Error(`不支援舊版 .${e} 格式，請用 Office 另存成 .${e}x 或 PDF`);
 
   // 1) 取得可送進模型的內容
@@ -61,10 +50,10 @@ export async function ingest(gw, { name, kind, base64 }) {
     }
     file = { mime: 'application/pdf', data: base64 };
   } else if (e === 'docx' || e === 'pptx') {
-    text = officeText(buf, name).slice(0, MAX_TEXT);
+    text = (await officeText(bytes, name)).slice(0, MAX_TEXT);
     if (text.length < 20) throw new Error('這個檔案讀不到文字，可能內容都是圖片。請改用 PDF 上傳。');
   } else if (e === 'txt' || e === 'md') {
-    text = buf.toString('utf8').slice(0, MAX_TEXT);
+    text = new TextDecoder('utf-8').decode(bytes).slice(0, MAX_TEXT);
   } else {
     throw new Error(`不支援的格式 .${e}，可用：PDF、DOCX、PPTX、TXT`);
   }
@@ -80,19 +69,17 @@ export async function ingest(gw, { name, kind, base64 }) {
   }
   if (!digest?.title) throw new Error('這份文件解析失敗，可能格式特殊或內容過少');
 
-  // 3) 保存原始檔（理賠查詢會回頭引用原文；也讓使用者能重新解析）
+  // 3) 保存（理賠查詢會回頭引用原文，所以 PDF 原檔也留著）
   const id = newId();
-  const stored = `${id}.${e}`;
-  fs.writeFileSync(path.join(FILES, stored), buf);
-
   const doc = {
     id, name, kind, title: digest.title || name, at: Date.now(),
-    file: stored, mime: e === 'pdf' ? 'application/pdf' : null,
+    raw: e === 'pdf' && bytes.length <= SOURCE_LIMIT ? base64 : null,
+    mime: e === 'pdf' ? 'application/pdf' : null,
     text, chars: text ? text.length : null,
     pages: (text?.match(/【第 \d+ 頁】/g) || []).length || null,
     digest,
   };
-  docs.push(doc); save();
+  await putDoc(doc);
 
   // 投影片多半是圖片時，取到的字會很少 → 明確提醒，而不是讓使用者拿到空洞的摘要
   let warning = null;
@@ -109,18 +96,10 @@ export async function ingest(gw, { name, kind, base64 }) {
 }
 
 // ── 取得查詢時要附帶的原文（理賠判斷要求高準確度，值得回送原始檔）──
-const SOURCE_LIMIT = 6 * 1024 * 1024;
-
 export function sourceFor(doc, gw) {
   if (doc.text) return { text: doc.text.slice(0, 120_000), file: null };
-  if (!gw?.supportsFile) return { text: null, file: null };   // 換了不支援 PDF 的供應商 → 只用摘要
-  try {
-    const p = path.join(FILES, doc.file);
-    if (fs.statSync(p).size <= SOURCE_LIMIT) {
-      return { text: null, file: { mime: doc.mime, data: fs.readFileSync(p).toString('base64') } };
-    }
-  } catch { /* 檔案不在了，退回只用摘要 */ }
-  return { text: null, file: null };
+  if (!gw?.supportsFile || !doc.raw) return { text: null, file: null };
+  return { text: null, file: { mime: doc.mime, data: doc.raw } };
 }
 
 // 給角色扮演用的商品重點（要短，塞進 persona prompt）

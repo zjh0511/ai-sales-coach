@@ -228,7 +228,13 @@ const A_HOST = 'https://api.anthropic.com/v1';
 class AnthropicAdapter extends Base {
   constructor(key) { super('anthropic', key); }
   get _headers() {
-    return { 'x-api-key': this.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
+    return {
+      'x-api-key': this.key,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      // 沒有這個標頭，Anthropic 會擋掉瀏覽器直接呼叫
+      'anthropic-dangerous-direct-browser-access': 'true',
+    };
   }
 
   async init() {

@@ -1,4 +1,5 @@
 import { Voice, supported } from './voice.js';
+import { api, providers, restore } from './engine/api.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
@@ -38,59 +39,21 @@ function toast(msg, ms = 2800) {
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), ms);
 }
 
-// ── API ────────────────────────────────────────────────────
-// 每次請求都帶上使用者自己的金鑰；金鑰只存在這台裝置的瀏覽器。
-const CODE_KEY = 'aicoach.code';
+// ── 金鑰 ────────────────────────────────────────────────────
+// 全部運算都在這台裝置完成，金鑰只存在瀏覽器，不會送到任何伺服器。
 const PROV_KEY = 'aicoach.provider';
 const AKEY_KEY = 'aicoach.apikey';
 
 const cred = () => ({ provider: localStorage.getItem(PROV_KEY), key: localStorage.getItem(AKEY_KEY) });
 
-async function api(path, body) {
-  const code = localStorage.getItem(CODE_KEY);
-  const { provider, key } = cred();
-  const r = await fetch('/api' + path, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(code ? { 'x-access-code': code } : {}),
-      ...(provider && key ? { 'x-ai-provider': provider, 'x-ai-key': key } : {}),
-    },
-    body: JSON.stringify(body || {}),
-  });
-  const j = await r.json().catch(() => ({ error: '連線失敗' }));
-  if (r.status === 401) {
-    logout(j.error || '請重新登入');
-    // 標記為認證錯誤，讓呼叫端不要再切換畫面（否則會蓋掉登入頁）
-    const err = new Error(j.error || '請重新登入'); err.auth = true; throw err;
-  }
-  if (!r.ok) throw new Error(j.error || '發生錯誤');
-  return j;
-}
+// api() 由 engine/api.js 提供；認證失敗會帶 e.auth，統一在這裡退回登入畫面
+window.addEventListener('unhandledrejection', e => { if (e.reason?.auth) logout(e.reason.message); });
 
 // ── 登入畫面 ────────────────────────────────────────────────
 let PROVIDERS = {};
 
 async function initLogin() {
-  const h = await fetch('/api/health').then(r => r.json()).catch(() => ({}));
-  PROVIDERS = h.providers || {};
-
-  // 部署方若另外設了通行碼，先過這一關
-  if (h.auth) {
-    while (true) {
-      const code = localStorage.getItem(CODE_KEY);
-      if (code) {
-        const ok = await fetch('/api/auth', {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }),
-        }).then(r => r.json()).then(j => j.ok).catch(() => false);
-        if (ok) break;
-        localStorage.removeItem(CODE_KEY);
-      }
-      const input = prompt('請輸入團隊通行碼');
-      if (input === null) return show('login');
-      localStorage.setItem(CODE_KEY, input.trim());
-    }
-  }
+  PROVIDERS = providers();
 
   const sel = $('#lg-provider');
   sel.innerHTML = '';
@@ -102,8 +65,17 @@ async function initLogin() {
   sel.value = localStorage.getItem(PROV_KEY) || Object.keys(PROVIDERS)[0] || 'gemini';
   syncProvider();
 
+  // 重新整理後用已存的金鑰靜默恢復，失敗就回登入畫面
   const { provider, key } = cred();
-  if (provider && key) return show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
+  if (provider && key) {
+    $('#lg-msg').textContent = '正在恢復上次的連線…';
+    if (await restore(provider, key)) {
+      return show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
+    }
+    localStorage.removeItem(AKEY_KEY);
+    $('#lg-msg').className = 'note err';
+    $('#lg-msg').textContent = '上次的金鑰已失效，請重新輸入';
+  }
   show('login');
 }
 
@@ -125,13 +97,7 @@ $('#lg-go').onclick = async () => {
   const btn = $('#lg-go'); btn.disabled = true; btn.textContent = '驗證中…';
   msg.className = 'note'; msg.textContent = '正在向服務商確認金鑰…';
   try {
-    const r = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(localStorage.getItem(CODE_KEY) ? { 'x-access-code': localStorage.getItem(CODE_KEY) } : {}) },
-      body: JSON.stringify({ provider, key }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || '驗證失敗');
+    const j = await api('/login', { provider, key });
     localStorage.setItem(PROV_KEY, provider);
     localStorage.setItem(AKEY_KEY, key);
     $('#lg-key').value = '';
