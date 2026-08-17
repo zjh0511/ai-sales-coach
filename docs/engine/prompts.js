@@ -70,6 +70,89 @@ export const CONTEXTS = {
   },
 };
 
+// ── 難度系統 ────────────────────────────────────────────────────
+// 原本難度只有一行文字描述，實測發現太弱——連 Level 1 的客戶都會冷淡、想掛電話，
+// 對新進夥伴是打擊信心而不是訓練。現在每一級都明確規定：
+// 態度、信任度區間、會不會主動結束對話、trust_delta 傾向、引導次數。
+// 信任度區間由程式夾住（見 session.js），不讓模型自己決定。
+export const DIFFICULTY = {
+  1: {
+    label: '新手友善',
+    desc: '溫和、有耐心、願意聊天。就算對方講得不流暢也會善意接話。',
+    trust: [62, 80],
+    guidance: 5,
+    canEnd: false,
+    rules: `這一級是給「第一次練習的新人」用的，你的任務是讓他敢開口，不是考驗他。
+・語氣溫和友善，像一位有耐心的長輩或熟人。
+・對方講得結巴、詞不達意、卡住的時候，你要善意地幫他接話，例如「你慢慢說沒關係」「你是說……的意思嗎？」。
+・不要主動說忙、不要催促、不要威脅要掛電話，也不要因為他講得不好就變冷淡。
+・只要他有基本的禮貌與誠意，就願意繼續聊，而且會答應他提出的合理請求（例如約時間）。
+・你仍然不會一開口就把心裡的事全講出來，但只要他問到相關的話題，你就願意分享。
+・trust_delta 偏正向：多數回合 0 到 +8；只有明顯無禮或違規時才給負值。`,
+  },
+  2: {
+    label: '一般',
+    desc: '正常有禮，但需要合理的理由才願意繼續。',
+    trust: [48, 65],
+    guidance: 4,
+    canEnd: true,
+    rules: `・語氣正常，不特別熱情也不冷淡。
+・會問「你找我什麼事」，需要一個合理的理由才願意聽下去。
+・對方卡住時你會等他一下，不會馬上結束對話。
+・trust_delta 多在 -3 到 +6。`,
+  },
+  3: {
+    label: '挑戰',
+    desc: '忙碌或略為冷淡，有一個明確的異議要處理。',
+    trust: [32, 50],
+    guidance: 3,
+    canEnd: true,
+    rules: `・你正在忙，講話簡短，會表達時間壓力。
+・你有一個明確的異議會拿出來（例如「我已經有保險了」「我沒時間」）。
+・對方若處理得好，你願意鬆口；處理不好就繼續擋。
+・trust_delta 多在 -6 到 +5。`,
+  },
+  4: {
+    label: '高難度',
+    desc: '防備心強，多重異議，回答簡短。',
+    trust: [22, 40],
+    guidance: 3,
+    canEnd: true,
+    rules: `・回答很短，通常一句話，不主動提供資訊。
+・你有兩到三個異議，會接連拿出來。
+・對方沒有明確價值就不願意繼續，可以直接說不需要。
+・trust_delta 多在 -8 到 +4。`,
+  },
+  5: {
+    label: '實戰',
+    desc: '高壓，連續拒絕，隨時可能結束對話。',
+    trust: [12, 30],
+    guidance: 3,
+    canEnd: true,
+    rules: `・接近真實的難搞客戶：不耐煩、資訊給得很少、連續拒絕。
+・可以在任何時候禮貌但明確地結束對話。
+・只有對方真正說到你在意的事，才會給他一次機會。
+・trust_delta 多在 -10 到 +4。
+・仍不使用粗話或人身攻擊。`,
+  },
+};
+
+export const difficultyOf = d => DIFFICULTY[d] || DIFFICULTY[2];
+
+// 程式層保險絲：使用者指定的個性與難度衝突時（例如「很冷淡」＋新手友善），
+// 模型會把自己的推理寫進人設欄位，例如
+// 「個性冷淡，但因為難度設定為新手友善，其實很有耐心」。
+// 提示詞擋不住，直接把含後設用語的子句刪掉。
+const META = /難度|設定為|系統設定|Level\s*\d|等級\s*\d/;
+
+export function scrubMeta(s) {
+  if (typeof s !== 'string') return s;
+  const kept = s.split(/(?<=[，。；])/).filter(part => !META.test(part));
+  const out = kept.join('').replace(/^[，。；、\s]+|[，、；\s]+$/g, '').trim();
+  // 整段都被刪光時退回原文，寧可留下後設用語也不要留空白人設
+  return out.length >= 4 ? (/[。！？]$/.test(out) ? out : out + '。') : s;
+}
+
 // ── 建立信任感（NLP 與實務）────────────────────────────────────
 export const RAPPORT = `【建立信任感的原則】
 1. 先跟後帶（Pacing & Leading）：先同步對方當下的狀態與步調——他說忙就先承認他忙，他冷淡就不要更熱情——順著走一段之後才引導。
@@ -168,13 +251,7 @@ ${NO_BRAND}
 export function personaPrompt({ gender, age, background, difficulty, mode = 'call', product = null, context = 'cold', contextNote = '' }) {
   const M = MODES[mode] || MODES.call;
   const C = CONTEXTS[context] || CONTEXTS.cold;
-  const levelDesc = {
-    1: '友善、願意聊、幾乎不拒絕',
-    2: '一般、有基本疑慮、需要理由才願意繼續',
-    3: '冷淡或忙碌、有一個明確異議',
-    4: '防備、多重異議、回答簡短',
-    5: '高壓實戰、資訊不完整、連續拒絕、隨時想結束對話',
-  }[difficulty] || '一般';
+  const D = difficultyOf(difficulty);
 
   return `${BASE}
 
@@ -183,7 +260,7 @@ export function personaPrompt({ gender, age, background, difficulty, mode = 'cal
 客戶性別：${gender}
 客戶年齡：${age}
 客戶背景：${background}
-難度等級：${difficulty}（${levelDesc}）
+難度等級：${difficulty}｜${D.label}——${D.desc}
 本次情境：${M.situation}
 接觸情境：${C.label}
 ${contextNote ? `使用者補充的情境說明：${contextNote}\n` : ''}${product ? `\n業務員這次要介紹的商品重點：\n${product}\n` : ''}
@@ -202,11 +279,29 @@ ${C.known}
 
 ${RAPPORT}
 
+【使用者指定的個性優先於你的判斷】
+「客戶背景」欄位是使用者自己填的。如果裡面已經描述了個性、說話方式或態度
+（例如「個性急躁」「很愛聊天」「講話很直」「疑心病重」「客氣但很難拒絕別人」），
+那是使用者**刻意指定**要練習的對象，你必須完全照著設定，不得改成你自己想的個性。
+背景沒提到的部分，才由你依情境合理補完。
+
+個性與難度是兩件事，不要混淆：
+・**個性**由使用者的背景描述決定（例如「愛聊天」就是愛聊天）。
+・**難度**只影響抗拒程度、信任度與願意透露多少（見上方難度說明）。
+・兩者可以並存。例如「愛聊天」＋高難度 ＝ 話很多但一直閃避重點、不願意約時間。
+・personality 與 communication_style 兩個欄位只描述**這個人本身**，
+　不得出現「難度」「設定」「系統」「因為難度是 1」這類後設用語。
+　兩者若看起來衝突，直接寫成一個合理的真人（例如「話少但很有耐心，會安靜聽完」）。
+
+【難度規則——必須嚴格遵守】
+${D.rules}
+初始 trust 必須落在 ${D.trust[0]} 到 ${D.trust[1]} 之間。
+${D.canEnd ? '' : '這一級的客戶不會主動結束對話，opening_line 也不可以出現趕人、說忙到不能講的語氣。\n'}
 【設計原則】
 1. 人設必須貼合上述背景，個性、說話方式、對保險的態度要具體，不要通用模板。
 2. hidden_needs 是客戶自己「還沒說出口、甚至還沒完全意識到」的需求，業務員必須靠提問才能挖到，不得在開場透露。
 3. objections 是這位客戶最可能講出口的拒絕理由，用他會講的原話。${product ? '其中至少一個要跟這個商品或保費有關。' : ''}
-4. opening_line 是這段對話一開始客戶說的第一句話，要短、像真人，且要符合「${C.label}」這個情境。
+4. opening_line 是這段對話一開始客戶說的第一句話，要短、像真人，且要符合「${C.label}」情境與上述難度。
 5. demo 是給業務員看的示範，必須簡短，包含：${M.demoHint}。示範不是標準答案，只是讓他知道怎麼起手。
    demo 必須完全符合上面的「已知資訊」邊界與建立信任感原則。
    key_question 要問「生活情境」，不要問「錢」或「保單」。
@@ -238,14 +333,31 @@ ${NO_BRAND}
 }
 
 // ── 角色扮演（Role Lock）────────────────────────────────────────
+// 模式規則要區分難度：原本 call 一律寫「你隨時可以說忙、可以想掛電話」，
+// 導致連新手友善級的客戶都很難搞，這是新人被打擊信心的主因。
 const MODE_RULES = {
-  call: '對方是打電話來的業務員。你隨時可以說忙、可以想掛電話。除非他真的講出讓你在意的事，否則不要輕易答應見面。',
-  needs: '你已經願意坐下來聊，所以不會馬上結束對話。但你只會回答被問到的事——問得淺你就答得淺，只有問到真正戳中你的問題，你才會多講一點內心話。對方若還沒問清楚就開始推銷，你會明顯變冷淡。',
-  product: '對方正在向你介紹商品。你會認真聽，但會問實際的問題（要繳多久、我這狀況賠不賠、有沒有更便宜的）。聽到聽不懂的專業術語，你會直接說聽不懂。',
+  call: {
+    easy: '對方是打電話來的業務員。你接電話的態度是友善的，願意聽他說完，不會急著掛電話。只要他有誠意，你會願意答應見面。',
+    hard: '對方是打電話來的業務員。你隨時可以說忙、可以想掛電話。除非他真的講出讓你在意的事，否則不要輕易答應見面。',
+  },
+  needs: {
+    easy: '你已經願意坐下來聊，氣氛是輕鬆的。你只會回答被問到的事，但只要他問得到相關話題，你就願意多講一點。他若還沒問清楚就開始推銷，你會提醒他「這個我還不太清楚耶」，而不是直接變冷淡。',
+    hard: '你已經願意坐下來聊，所以不會馬上結束對話。但你只會回答被問到的事——問得淺你就答得淺，只有問到真正戳中你的問題，你才會多講一點內心話。對方若還沒問清楚就開始推銷，你會明顯變冷淡。',
+  },
+  product: {
+    easy: '對方正在向你介紹商品。你會認真聽、會給他把話講完的機會，也會問一些實際的問題。聽到聽不懂的專業術語，你會客氣地說「這個可以再解釋一下嗎」。',
+    hard: '對方正在向你介紹商品。你會認真聽，但會問實際的問題（要繳多久、我這狀況賠不賠、有沒有更便宜的）。聽到聽不懂的專業術語，你會直接說聽不懂。',
+  },
+};
+
+const modeRule = (mode, difficulty) => {
+  const r = MODE_RULES[mode] || MODE_RULES.call;
+  return Number(difficulty) <= 2 ? r.easy : r.hard;
 };
 
 export function roleplaySystem(p, mode = 'call', context = 'cold') {
   const C = CONTEXTS[context] || CONTEXTS.cold;
+  const D = difficultyOf(p.difficulty);
   return `${BASE}
 
 【現在的身分】你「就是」這位客戶本人。你不是教練、不是助理、不是AI。
@@ -267,8 +379,11 @@ export function roleplaySystem(p, mode = 'call', context = 'cold') {
 ${(p.hidden_needs || []).map((h, i) => `  ${i + 1}. ${h}`).join('\n')}
 你最可能講出口的拒絕：${(p.objections || []).join('；')}
 ${p.productBrief ? `\n【對方要介紹的商品（你事前並不了解，只能就聽到的內容提問）】\n${p.productBrief}\n` : ''}
-【本模式規則】${MODE_RULES[mode] || MODE_RULES.call}
+【本模式規則】${modeRule(mode, p.difficulty)}
 
+【本次難度：${D.label}】${D.desc}
+${D.rules}
+${D.canEnd ? '' : '【重要】這一級你不會主動結束對話，也不會說要掛電話。只有對方自己說要結束才結束。\n'}
 【絕對規則】
 1. 只用客戶第一人稱講話，每次 1～3 句，口語、可以有「嗯」「這個」等停頓詞。
 2. 嚴禁評論、分析、教學、稱讚、給建議、給話術、打分數。
@@ -289,12 +404,26 @@ end：只有在你已經明確答應對方的請求，或你已經決定結束�
 {"say":"你要說的話","trust_delta":0,"revealed":[],"end":false}`;
 }
 
-export function roleplayTurn({ history, userText, trust, guidance }) {
+export function roleplayTurn({ history, userText, trust, guidance, difficulty = 1, maxGuidance = 5, canEnd = false }) {
   const convo = history.map(t => `${t.speaker === 'user' ? '對方' : '你'}：${t.text}`).join('\n');
+  const gentle = Number(difficulty) <= 2;
   let extra = '';
-  if (guidance === 1) extra = '\n\n【本回合額外指示】對方剛才講得不清楚。用客戶的身分自然追問，不要教他。';
-  if (guidance === 2) extra = '\n\n【本回合額外指示】對方又一次講不清楚。用客戶身分再問一次，語氣可以帶一點不耐煩。';
-  if (guidance >= 3) extra = '\n\n【本回合額外指示】對方已經連續三次無法把話講清楚。請像真實客戶那樣委婉但明確地結束這次談話，並把 end 設為 true。';
+
+  if (guidance > 0) {
+    if (gentle) {
+      // 新手級：卡住時要「幫他」，不是「罰他」。這是新人願不願意練第二次的關鍵。
+      extra = '\n\n【本回合額外指示】對方講得不太順。請用客戶的身分善意地幫他接話，'
+        + '例如「你慢慢說沒關係」「你的意思是……嗎？」，給他一個容易回答的具體問題。'
+        + '不要不耐煩，也不要結束對話。';
+    } else if (guidance === 1) {
+      extra = '\n\n【本回合額外指示】對方剛才講得不清楚。用客戶的身分自然追問，不要教他。';
+    } else if (guidance < maxGuidance) {
+      extra = '\n\n【本回合額外指示】對方又一次講不清楚。用客戶身分再問一次，語氣可以帶一點不耐煩。';
+    } else if (canEnd) {
+      extra = `\n\n【本回合額外指示】對方已經連續 ${guidance} 次無法把話講清楚。`
+        + '請像真實客戶那樣委婉但明確地結束這次談話，並把 end 設為 true。';
+    }
+  }
 
   return `【目前你對他的信任度】${trust}／100
 

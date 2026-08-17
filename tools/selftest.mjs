@@ -10,6 +10,7 @@ import * as AD from '../docs/engine/advisor.js';
 import { checkCompliance } from '../docs/engine/compliance.js';
 import { officeText } from '../docs/engine/docx.js';
 import { scrubBrands } from '../docs/engine/prompts.js';
+import * as P from '../docs/engine/prompts.js';
 import { loadKeys } from './keys.mjs';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,7 +47,21 @@ if (run(1)) {
   ];
   for (const [i, o] of cases) ok(scrubBrands(i) === o, `「${i.slice(0, 16)}…」`, scrubBrands(i));
 
-  console.log('\n=== 1c. Office 文件解析（零外部相依）===');
+  console.log('\n=== 1c. 難度系統與人設後設用語過濾 ===');
+  ok(P.difficultyOf(1).canEnd === false, 'Level 1 客戶不會主動結束對話');
+  ok(P.difficultyOf(1).trust[0] >= 60, `Level 1 初始信任度下限 ${P.difficultyOf(1).trust[0]}（≥60）`);
+  ok(P.difficultyOf(1).guidance > P.difficultyOf(5).guidance,
+    `Level 1 引導次數 ${P.difficultyOf(1).guidance} > Level 5 的 ${P.difficultyOf(5).guidance}`);
+  ok(P.difficultyOf(5).canEnd === true, 'Level 5 客戶可以主動結束對話');
+  ok(P.difficultyOf(1).trust[0] > P.difficultyOf(5).trust[1], '難度越低初始信任度越高');
+  ok(P.difficultyOf(99).label === P.DIFFICULTY[2].label, '未知難度退回 Level 2');
+
+  ok(P.scrubMeta('個性冷淡，但因為難度設定為新手友善，其實很有耐心。') === '個性冷淡，其實很有耐心。',
+    '刪除人設中的後設用語子句');
+  ok(P.scrubMeta('個性很急，只想聽重點。') === '個性很急，只想聽重點。', '正常人設不被動到');
+  ok(P.scrubMeta('系統設定為 Level 3。') === '系統設定為 Level 3。', '整段都是後設時退回原文，不留空人設');
+
+  console.log('\n=== 1d. Office 文件解析（零外部相依）===');
   const pptx = path.join(DIR, '【AiCoach】AI業務教練.pptx');
   if (fs.existsSync(pptx)) {
     const txt = await officeText(new Uint8Array(fs.readFileSync(pptx)), 'x.pptx');

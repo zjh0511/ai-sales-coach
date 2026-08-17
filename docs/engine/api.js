@@ -71,7 +71,7 @@ export async function api(path, body = {}) {
         if (body.mode === 'product' && !doc) throw new Error('請先選擇一份商品教材');
         return await CE.startSession(need(), {
           mode: body.mode || 'call', gender: body.gender, age: body.age, background: body.background,
-          difficulty: Number(body.difficulty) || 2, doc,
+          difficulty: Number(body.difficulty) || 1, doc,
           context: body.context || 'cold', contextNote: (body.contextNote || '').slice(0, 300),
         });
       }

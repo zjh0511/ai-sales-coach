@@ -319,6 +319,7 @@ function openIntake(fn) {
   $('#i-product').hidden = fn !== 'product';
   if (fn === 'product' && S.doc) $('#i-product-name').textContent = S.doc.title;
   $('#btn-go').textContent = fn === 'pain' ? '分析痛點' : '建立客戶';
+  syncDifficulty();
   show('intake');
 }
 
@@ -326,9 +327,20 @@ for (const id of ['#f-gender', '#f-diff', '#f-ctx']) {
   $(id).addEventListener('click', e => {
     const c = e.target.closest('.chip'); if (!c) return;
     $(id).querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
+    if (id === '#f-diff') syncDifficulty();
   });
 }
 const pick = id => $(id).querySelector('.chip.on')?.dataset.v;
+
+// 讓使用者選難度前就知道會遇到什麼樣的客戶
+const DIFF_HINT = {
+  1: '客戶溫和有耐心，你講不順時他會善意幫你接話，不會掛電話。第一次練習建議從這裡開始。',
+  2: '客戶態度正常，需要一個合理的理由才願意聽下去。',
+  3: '客戶在忙、講話簡短，並且有一個明確的異議要你處理。',
+  4: '客戶防備心強，回答很短，會接連丟出兩到三個異議。',
+  5: '接近真實的難搞客戶：連續拒絕、資訊給得少，隨時可能結束對話。',
+};
+const syncDifficulty = () => { $('#diff-hint').textContent = DIFF_HINT[pick('#f-diff')] || ''; };
 
 $('#btn-go').onclick = async () => {
   const background = $('#f-bg').value.trim();
@@ -353,7 +365,8 @@ $('#btn-go').onclick = async () => {
     S.sessionId = d.sessionId; S.persona = d.persona; S.ended = false;
     $('#b-title').textContent = MODE_TITLE[S.fn] || '演練前準備';
     $('#b-name').textContent = d.persona.name;
-    $('#b-summary').textContent = d.persona.summary + (d.contextLabel ? `　·　${d.contextLabel}` : '');
+    $('#b-summary').textContent = [d.persona.summary, d.contextLabel, d.persona.difficultyLabel]
+      .filter(Boolean).join('　·　');
     $('#b-obj').textContent = d.scenario?.objective || '';
     $('#b-open').textContent = d.demo?.opening || '';
     $('#b-q').textContent = d.demo?.key_question || '';

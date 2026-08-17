@@ -7,7 +7,6 @@ import { checkCompliance, interventionMessage } from './compliance.js';
 import { productBrief } from './knowledge.js';
 import * as P from './prompts.js';
 
-const MAX_GUIDANCE = 3;      // 產品規格 §17：最多三次自然引導
 const MIN_TURNS = 4;         // 演練終點由程式判定，不讓 LLM 在第一回合就結束
 const SESSION_TTL = 60 * 60 * 1000;
 
@@ -27,8 +26,10 @@ export function getSession(id) {
 }
 
 // ── 建立 Session：Persona + Scenario + Demo ─────────────────────
-export async function startSession(gw, { mode = 'call', gender, age, background, difficulty = 2, doc = null, context = 'cold', contextNote = '' }) {
+// 預設「新手友善」：訓練工具若一開始就打擊信心，就失去存在意義
+export async function startSession(gw, { mode = 'call', gender, age, background, difficulty = 1, doc = null, context = 'cold', contextNote = '' }) {
   if (!P.MODES[mode]) throw new Error('unknown_mode');
+  difficulty = Math.min(5, Math.max(1, Number(difficulty) || 1));
   if (!P.CONTEXTS[context]) context = 'cold';
   const brief = doc ? productBrief(doc) : null;
   const base = P.personaPrompt({ gender, age, background, difficulty, mode, product: brief, context, contextNote });
@@ -52,12 +53,22 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
   }
   if (!p || !p.opening_line) throw new Error('persona_generation_failed');
 
+  // 人設欄位不該出現「因為難度設定為…」這類後設用語
+  p.personality = P.scrubMeta(p.personality);
+  p.communication_style = P.scrubMeta(p.communication_style);
+
   const persona = { ...p, gender, age, background, difficulty, productBrief: brief, contextNote };
+  const D = P.difficultyOf(difficulty);
+  // 初始信任度由程式夾在難度區間內。模型常給出偏低的值，
+  // 新手友善級卻開場就 trust=15 的話，客戶會冷淡到沒辦法練習。
+  const trust = Math.min(D.trust[1], Math.max(D.trust[0], Number(p.trust) || D.trust[0]));
+
   const id = newId();
   sessions.set(id, {
     id, mode, context, state: 'READY', persona,
     docId: doc?.id || null, productBrief: brief,
-    trust: Number.isFinite(p.trust) ? p.trust : 45,
+    difficulty, maxGuidance: D.guidance, canEnd: D.canEnd,
+    trust,
     history: [], violations: [], revealed: new Set(),
     guidance: 0, stuck: 0, startedAt: null, touched: Date.now(), lastUser: '', latency: [],
   });
@@ -67,7 +78,7 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
     persona: {                       // 只回傳 Public State，隱藏需求不下發到 Client
       name: p.name, summary: p.public_summary,
       voice: p.voice_hint || { rate: 1, pitch: 1 },
-      difficulty,
+      difficulty, difficultyLabel: D.label,
     },
     scenario: p.scenario,
     demo: P.scrubDeep(p.demo),        // 示範話術不預設任何保險公司
@@ -118,6 +129,7 @@ export async function handleTurn(gw, s, userText) {
   const turn = P.roleplayTurn({
     history: s.history.filter(h => h.speaker !== 'system').slice(-12),
     userText: text, trust: s.trust, guidance: s.guidance,
+    difficulty: s.difficulty, maxGuidance: s.maxGuidance, canEnd: s.canEnd,
   });
 
   let say = null, data = null, ms = 0;
@@ -129,7 +141,11 @@ export async function handleTurn(gw, s, userText) {
     data = parseJson(r.text) || {};
     say = P.validateRoleplay(data.say);
   }
-  if (!say) say = s.guidance >= MAX_GUIDANCE ? '不好意思，我現在真的有點忙，可能沒辦法聊，先這樣好嗎？' : '嗯……你的意思是？';
+  if (!say) {
+    say = (s.canEnd && s.guidance >= s.maxGuidance)
+      ? '不好意思，我現在真的有點忙，可能沒辦法聊，先這樣好嗎？'
+      : '嗯……你的意思是？';
+  }
 
   // 4) 狀態更新（由程式控制，不交給 LLM）
   const delta = Math.max(-15, Math.min(15, Number(data.trust_delta) || 0));
@@ -143,9 +159,11 @@ export async function handleTurn(gw, s, userText) {
   s.latency.push(ms);
   s.history.push({ speaker: 'customer', text: say, at: Date.now() });
 
-  // 結束條件由程式判定（規格 §19、§92）：LLM 只提供訊號，不能自己決定演練終點
+  // 結束條件由程式判定（規格 §19、§92）：LLM 只提供訊號，不能自己決定演練終點。
+  // 新手友善級（canEnd=false）客戶不會主動結束，使用者卡住也不會被掛電話。
   const userTurns = s.history.filter(h => h.speaker === 'user').length;
-  const ended = s.guidance >= MAX_GUIDANCE || (data.end === true && userTurns >= MIN_TURNS);
+  const ended = s.canEnd
+    && (s.guidance >= s.maxGuidance || (data.end === true && userTurns >= MIN_TURNS));
   if (ended) s.state = 'COMPLETED';
 
   return {

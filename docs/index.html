@@ -111,14 +111,16 @@
     <div class="chips" id="f-gender"><button class="chip on" data-v="男">男</button><button class="chip" data-v="女">女</button></div>
     <label>客戶年齡</label>
     <input id="f-age" type="text" placeholder="例如：約 45 歲" value="約 45 歲">
-    <label>客戶背景<small>行業、家庭狀況，想到什麼就寫什麼</small></label>
-    <textarea id="f-bg" rows="4" placeholder="例如：科技業主管，已婚有兩個小孩，工作很忙，之前買過保險但不太清楚內容"></textarea>
+    <label>客戶背景<small>行業、家庭狀況，<b>以及你想練的個性</b>——想到什麼就寫什麼</small></label>
+    <textarea id="f-bg" rows="5" placeholder="例如：科技業主管，已婚有兩個小孩，工作很忙，之前買過保險但不太清楚內容。個性比較急、講話很直，不喜歡拐彎抹角。"></textarea>
+    <p class="note">想練特定型客戶就直接寫進去，AI 會照著演：<b>愛聊天、話很多</b>／<b>個性急、要你講重點</b>／<b>客氣但很難拒絕別人</b>／<b>疑心病重、什麼都要問清楚</b>／<b>很冷淡、只回一兩個字</b>／<b>理性、喜歡看數據</b></p>
     <div id="i-diff-wrap">
-      <label>難度</label>
+      <label>難度<small>難度只影響「抗拒程度」，個性請寫在上面的背景欄</small></label>
       <div class="chips" id="f-diff">
-        <button class="chip" data-v="1">1 友善</button><button class="chip on" data-v="2">2 一般</button>
+        <button class="chip on" data-v="1">1 新手友善</button><button class="chip" data-v="2">2 一般</button>
         <button class="chip" data-v="3">3 挑戰</button><button class="chip" data-v="4">4 高難度</button><button class="chip" data-v="5">5 實戰</button>
       </div>
+      <p class="note" id="diff-hint"></p>
     </div>
     <p class="note">請勿輸入真實姓名、電話、身分證號等個人資料。</p>
   </div>
