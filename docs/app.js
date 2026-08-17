@@ -265,9 +265,22 @@ async function renderModels() {
   if (q && !sorted.length) c.append(el('p', 'note', '找不到符合的模型。'));
   b.append(c);
 
+  const freeCount = st.models.filter(m => m.free).length;
   b.append(el('p', 'note',
-    `共偵測到 ${st.models.length} 個可用模型，清單來自你的金鑰實際查詢結果。`
-    + '標「(Free)」的是免費模型，不會產生費用，但速度與中文品質通常較差。'));
+    `共偵測到 ${st.models.length} 個可用模型（其中 ${freeCount} 個免費），清單來自你的金鑰實際查詢結果。`));
+
+  if (freeCount) {
+    const w = el('div', 'card warn');
+    w.append(el('h4', null, '關於標「(Free)」的免費模型'));
+    w.append(el('p', null, '免費模型不會產生費用，但實測有三個明顯限制：'));
+    w.append(list([
+      '慢。實測約 7～20 秒才回一句話，語音對練會覺得客戶反應遲鈍。',
+      '常排不進去。所有人共用同一個流量池，經常回「使用的人太多」，跟你的額度無關。',
+      '中文品質不穩。部分模型會回簡體字或夾雜其他語言。',
+    ]));
+    w.append(el('p', 'note', '結論：免費模型適合先試試看功能。要真的拿來練語音對談，建議用 Google Gemini 的免費金鑰，或在 OpenRouter 儲值後改用付費模型。'));
+    b.append(w);
+  }
   b.scrollTop = 0;
 }
 
@@ -785,7 +798,9 @@ let lastEvt = 0;
 onModelEvent(e => {
   if (Date.now() - lastEvt < 8000) return;          // 同一波事件不要洗版
   lastEvt = Date.now();
-  if (e.type === 'quota') toast(`${e.model} 額度用盡，已自動改用備援模型（約 ${e.minutes} 分鐘後回頭嘗試）`, 5000);
+  if (e.type === 'slow') toast(`${e.model} 沒有回應，已換下一個模型`, 4000);
+  else if (e.type === 'busy') toast(`${e.model} 目前使用的人太多，暫時換別的模型（約 ${e.minutes} 分鐘後回頭嘗試）`, 5000);
+  else if (e.type === 'quota') toast(`${e.model} 額度用盡，已自動改用備援模型（約 ${e.minutes} 分鐘後回頭嘗試）`, 5000);
   else if (e.type === 'fallback') toast(`目前改用 ${e.to}`, 3000);
 });
 

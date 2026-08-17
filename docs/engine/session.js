@@ -34,14 +34,16 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
   const base = P.personaPrompt({ gender, age, background, difficulty, mode, product: brief, context, contextNote });
 
   // 示範話術若洩漏了業務員不可能知道的客戶私人資訊，重新產生一次（規格 §68 Output Validation）
+  // 重試三次：實測遇過連續兩次都在「異議處理」段落越界的情況
   let p = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const extra = attempt === 0 ? '' :
       '\n\n【重要】上一次你產生的示範話術，講出了業務員在這個接觸情境下不可能知道的客戶私人資訊'
       + '（例如保額、保單、繳費金額）。請重新設計，示範話術只能從業務員已知的資訊與一般生活情境出發。';
     const r = await gw.generate(base + extra, {
       // max 需涵蓋思考 token（Gemini 3.x 的 thinking 計入 maxOutputTokens）
-      json: true, temp: attempt === 0 ? 1.0 : 0.7, max: 4000, tier: 'fast', noThink: true,
+      // 建立客戶要產生一大段 JSON，比單回合對話慢得多，逾時要放寬
+      json: true, temp: attempt === 0 ? 1.0 : 0.7, max: 4000, tier: 'fast', noThink: true, timeout: 60000,
     });
     p = parseJson(r.text);
     if (!p?.opening_line) continue;

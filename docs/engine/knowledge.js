@@ -63,7 +63,8 @@ export async function ingest(gw, { name, kind, base64 }) {
   let digest = null;
   for (let i = 0; i < 3 && !digest?.title; i++) {
     const r = await gw.generate(prompt, {
-      json: true, temp: 0.1 + i * 0.15, max: 32000, tier: 'judge', noThink: true, file,
+      // 整份文件解析可能很久，尤其掃描版 PDF
+      json: true, temp: 0.1 + i * 0.15, max: 32000, tier: 'judge', noThink: true, file, timeout: 150000,
     });
     digest = parseJson(r.text);
   }

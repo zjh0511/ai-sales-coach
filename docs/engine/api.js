@@ -24,7 +24,8 @@ async function connect(provider, key) {
   try {
     await a.init();                                  // 探測可用模型，順便驗證金鑰
   } catch (err) {
-    const e = new Error(friendlyError(scrubKey(err.message, key), provider));
+    const raw = scrubKey(err.message, key);
+    const e = new Error(friendlyError(raw, provider) || `無法連線：${raw.slice(0, 160)}`);
     e.auth = true;
     throw e;
   }
@@ -111,16 +112,26 @@ export async function api(path, body = {}) {
     }
   } catch (e) {
     if (e.auth) throw e;
-    const safe = friendlyError(scrubKey(e.message, current.key), current.provider);
-    // 金鑰相關問題要讓 UI 退回登入畫面
-    // 餘額不足不是金鑰問題，不該把使用者踢回登入畫面
-    if (/餘額不足/.test(safe)) throw new Error(safe);
-    if (/金鑰|額度|權限/.test(safe)) { const err = new Error(safe); err.auth = true; throw err; }
-    console.error(`[api] ${path} → ${safe.slice(0, 200)}`);
-    throw new Error(
-      /不支援|連不上|服務商|請先|沒有收到|未指定|請描述|請輸入|超過上限|讀不到|解析失敗/.test(safe)
-        ? safe : '剛剛好像卡了一下，請再試一次。'
-    );
+    const raw = scrubKey(e.message, current.key);
+    const friendly = friendlyError(raw, current.provider);
+
+    if (friendly) {
+      console.error(`[api] ${path} → ${friendly}`);
+      // 只有「金鑰無效／沒權限」才該退回登入畫面；
+      // 餘額不足、限流、逾時都不是金鑰問題，把人踢回登入只會讓他更困惑
+      if (/金鑰無效|沒有使用權限|是否已開通/.test(friendly)) {
+        const err = new Error(friendly); err.auth = true; throw err;
+      }
+      throw new Error(friendly);
+    }
+
+    // 我們自己丟出的操作提示，原文就是給使用者看的
+    if (/請先|沒有收到|未指定|請描述|請輸入|超過上限|讀不到|解析失敗|不支援|逾時，請重新開始/.test(raw)) {
+      throw new Error(raw);
+    }
+
+    console.error(`[api] ${path} → ${raw.slice(0, 200)}`);
+    throw new Error('剛剛好像卡了一下，請再試一次。');
   }
 }
 

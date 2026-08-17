@@ -57,8 +57,25 @@ const PICK = {
   deepseek: { fast: [/chat/], judge: [/reasoner/, /chat/] },
 };
 
+// 免費模型的備援優先順序。依 2026-08-17 實測排序：
+//   gemma-4-26b:free  6.9 秒、JSON 正確、繁體中文正常  ← 目前唯一實測可用的
+//   dots-3-note:free  5.7 秒、JSON 正確，但回簡體中文
+//   nemotron:free     3.9 秒，但輸出思考過程而非 JSON
+//   lfm-2.5-2.6b:free 46 秒、中文夾雜其他語言 → 排到最後
+// 只實測過其中幾個，未測過的排中間，明顯過小的模型排後面。
+const FREE_GOOD = [/gemma-4-26b/, /gemma-4-31b/, /gemma-4/, /gpt-oss/, /qwen/, /llama/, /mistral/];
+const FREE_BAD = [/lfm|[^\d]2\.\d?b|[^\d]1\.\d?b|-xs-|xs-\d|mini-code|tiny|nano/i];
+
+const freeScore = id => {
+  if (FREE_BAD.some(re => re.test(id))) return 90;
+  const i = FREE_GOOD.findIndex(re => re.test(id));
+  return i < 0 ? 50 : i;
+};
+
 const RETRYABLE = /\b(429|500|502|503|504)\b|empty response|truncated|fetch failed|timed out|TimeoutError|overloaded/i;
 const COOLDOWN_MS = 10 * 60 * 1000;
+// 免費模型的上游流量池通常幾十秒就會空出來，不必冷卻十分鐘
+const UPSTREAM_COOLDOWN_MS = 60 * 1000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── 共用基底：重試、額度冷卻、模型降級 ─────────────────────────
@@ -71,6 +88,7 @@ class Base {
     this.fastList = []; this.judgeList = [];
     this.pinned = null;                  // 使用者指定的單一模型；null = 自動
     this.cooldown = new Map();
+    this.noCreditsUntil = 0;             // 遇到 402 後暫時跳過付費模型
     this.onEvent = null;                 // 降階／額度用盡時通知 UI
   }
   get fast() { return this.fastList[0]; }
@@ -96,10 +114,23 @@ class Base {
   // 自動模式下，角色扮演與評分仍各自挑最適合的（快 vs 準），使用者不必知道這層細節。
   _apply() {
     const ids = this.all.map(m => m.id);
-    const chain = auto => [...new Set([this.pinned, ...auto, ...ids].filter(Boolean))].slice(0, 6);
+    // 免費模型品質落差極大，備援時依實測結果排序，別掉到會卡 46 秒的那種
+    const freeIds = this.all.filter(m => m.free).map(m => m.id)
+      .sort((a, b) => freeScore(a) - freeScore(b) || a.localeCompare(b));
+    const pinnedIsFree = this.pinned && freeIds.includes(this.pinned);
+
+    // 指定免費模型時，備援也優先挑免費的。
+    // 否則免費模型被上游限流後會掉到付費模型，再回報「餘額不足」——使用者明明選了免費的。
+    const chain = auto => {
+      const rest = pinnedIsFree ? [...freeIds, ...auto, ...ids] : [...auto, ...ids];
+      return [...new Set([this.pinned, ...rest].filter(Boolean))].slice(0, 6);
+    };
     this.fastList = chain(this.autoFast);
     this.judgeList = chain(this.autoJudge);
   }
+
+  _isFree(id) { return !!this.all.find(m => m.id === id)?.free; }
+  _meta(id) { return this.all.find(m => m.id === id) || {}; }
 
   pin(model) {
     this.pinned = this.all.some(m => m.id === model) ? model : null;
@@ -126,14 +157,28 @@ class Base {
   }
 
   async generate(text, opts = {}) {
-    const list = opts.tier === 'judge' ? this.judgeList : this.fastList;
+    const judge = opts.tier === 'judge';
+    const list = judge ? this.judgeList : this.fastList;
     if (!list.length) throw new Error('尚未取得可用模型，請重新登入');
 
+    // 單次呼叫的逾時，以及整個 generate() 的總時限。
+    // 兩個都要有：某些免費模型不會回 429 而是直接掛住，只設單次逾時的話
+    // 「單次 × 重試 × 模型數」會累積成好幾分鐘，使用者只會覺得「卡住了」。
+    opts = { timeout: judge ? 45000 : 25000, ...opts };
+    // 呼叫端若刻意給了較長的逾時（例如解析文件），總時限也要跟著放寬
+    const deadline = Date.now() + Math.max(judge ? 100000 : 50000, opts.timeout * 2);
+
     const now = Date.now();
-    const usable = list.filter(m => (this.cooldown.get(m) || 0) < now);
-    const chain = usable.length ? usable : list;
+    let chain = list.filter(m => (this.cooldown.get(m) || 0) < now);
+    if (!chain.length) chain = list;
+    // 已知帳戶沒餘額 → 別再一個個試付費模型，直接只走免費的
+    if (this.noCreditsUntil > now && chain.some(m => this._isFree(m))) {
+      chain = chain.filter(m => this._isFree(m));
+    }
+
     let last;
     for (const model of chain) {
+      if (Date.now() > deadline) break;                    // 總時限到了就不再試下一個模型
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const r = await this._call(model, text, opts);
@@ -142,11 +187,30 @@ class Base {
           return r;
         } catch (e) {
           last = e;
+          // 402：帳戶沒餘額。記下來，之後只試免費模型
+          if (/\b402\b/.test(e.message)) {
+            this.noCreditsUntil = Date.now() + COOLDOWN_MS;
+            if (chain.some(m => this._isFree(m) && m !== model)) break;   // 還有免費的可試
+            throw e;
+          }
           if (!RETRYABLE.test(e.message)) throw e;          // 非暫時性錯誤直接拋出
-          if (/\b429\b/.test(e.message)) {                   // 額度用盡，重試無意義
-            this.cooldown.set(model, Date.now() + COOLDOWN_MS);
-            this.onEvent?.({ type: 'quota', model, minutes: COOLDOWN_MS / 60000 });
-            console.warn(`[gateway] ${model} 額度用盡，暫停使用 ${COOLDOWN_MS / 60000} 分鐘`);
+
+          // 逾時代表這個模型現在很慢或掛住，重試同一個沒有意義，直接換下一個
+          if (/timed out|TimeoutError|aborted/i.test(e.message)) {
+            this.cooldown.set(model, Date.now() + UPSTREAM_COOLDOWN_MS);
+            this.onEvent?.({ type: 'slow', model });
+            console.warn(`[gateway] ${model} 逾時無回應，換下一個模型`);
+            break;
+          }
+
+          if (/\b429\b/.test(e.message)) {                   // 限流／額度，重試無意義
+            const upstream = /rate.?limited upstream|temporarily rate.?limited/i.test(e.message);
+            this.cooldown.set(model, Date.now() + (upstream ? UPSTREAM_COOLDOWN_MS : COOLDOWN_MS));
+            this.onEvent?.({
+              type: upstream ? 'busy' : 'quota', model,
+              minutes: (upstream ? UPSTREAM_COOLDOWN_MS : COOLDOWN_MS) / 60000,
+            });
+            console.warn(`[gateway] ${model} ${upstream ? '上游限流' : '額度用盡'}，暫停使用`);
             break;
           }
           if (attempt < 2) await sleep(250 * (attempt + 1) ** 2);
@@ -157,8 +221,18 @@ class Base {
     throw last;
   }
 
-  async _fetch(url, init) {
-    const r = await fetch(url, { ...init, signal: AbortSignal.timeout(90000) });
+  async _fetch(url, init, timeout = 90000) {
+    let r;
+    try {
+      r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
+    } catch (e) {
+      // 在源頭把各種底層錯誤正規化成固定字樣，上層才不必猜瀏覽器／Node 的措辭。
+      // 例：AbortSignal.timeout 的訊息是「aborted due to timeout」，不含「timed out」。
+      if (e.name === 'TimeoutError' || /abort/i.test(e.message || '')) {
+        throw new Error(`${this.provider} timed out after ${timeout}ms`);
+      }
+      throw new Error(`${this.provider} fetch failed: ${e.message}`);
+    }
     if (!r.ok) {
       const body = (await r.text()).slice(0, 200);
       throw new Error(`${this.provider} ${r.status}: ${scrubKey(body, this.key)}`);
@@ -235,6 +309,11 @@ class OpenAICompatAdapter extends Base {
   get _headers() { return { authorization: `Bearer ${this.key}`, 'content-type': 'application/json' }; }
 
   async init() {
+    // OpenRouter 的 /models 是公開端點，假金鑰也拿得到清單。
+    // 必須另外打一個需要驗證的端點，否則「登入時驗證金鑰」形同虛設。
+    if (this.provider === 'openrouter') {
+      await this._fetch(`${this.base}/key`, { headers: this._headers }, 20000);
+    }
     const j = await this._fetch(`${this.base}/models`, { headers: this._headers });
     const names = (j.data || [])
       .map(m => ({
@@ -243,9 +322,19 @@ class OpenAICompatAdapter extends Base {
         // 以服務商回報的實際價格判定免費，比只看名稱可靠
         free: /:free$/.test(m.id)
           || (m.pricing && Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0),
+        // 有些模型不支援 response_format，硬送會 400；上限也各不相同
+        json: !m.supported_parameters || m.supported_parameters.includes('response_format'),
+        maxOut: m.top_provider?.max_completion_tokens || null,
+        // 只保留「純文字輸出」的模型。依名稱過濾會漏——例如 google/lyria 是音樂生成，
+        // 但輸出模態是 ["text","audio"]，名稱裡完全看不出來。
+        textOnly: (() => {
+          const o = m.architecture?.output_modalities;
+          return !Array.isArray(o) || (o.length === 1 && o[0] === 'text');
+        })(),
       }))
-      // :batch 是非同步批次介面，不能用在即時對話；其餘為非文字模型
-      .filter(m => !/embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcribe|:batch/.test(m.id));
+      .filter(m => m.textOnly)
+      // :batch 是非同步批次介面，不能用在即時對話
+      .filter(m => !/embed|whisper|tts|dall-e|moderation|realtime|transcribe|:batch/.test(m.id));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');
     this._rank(names);
     return { fast: this.fast, judge: this.judge };
@@ -259,18 +348,21 @@ class OpenAICompatAdapter extends Base {
       ...(opts.history || []).map(h => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: h.text })),
       { role: 'user', content: text },
     ];
+    const meta = this._meta(model);
+    const cap = meta.maxOut ? Math.min(opts.max ?? 800, meta.maxOut) : (opts.max ?? 800);
     const body = {
       model, messages,
       temperature: opts.temp ?? 0.8,
-      [altTokenField ? 'max_completion_tokens' : 'max_tokens']: opts.max ?? 800,
-      ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
+      [altTokenField ? 'max_completion_tokens' : 'max_tokens']: cap,
+      // 模型不支援 response_format 就別送（硬送會 400）；提示詞本身已要求只輸出 JSON
+      ...(opts.json && meta.json !== false ? { response_format: { type: 'json_object' } } : {}),
     };
 
     let j;
     try {
       j = await this._fetch(`${this.base}/chat/completions`, {
         method: 'POST', headers: this._headers, body: JSON.stringify(body),
-      });
+      }, opts.timeout);
     } catch (e) {
       // 新版 OpenAI 模型只接受 max_completion_tokens
       if (!altTokenField && /max_completion_tokens|max_tokens/.test(e.message)) return this._call(model, text, opts, true);
@@ -323,7 +415,7 @@ class AnthropicAdapter extends Base {
     };
     const j = await this._fetch(`${A_HOST}/messages`, {
       method: 'POST', headers: this._headers, body: JSON.stringify(body),
-    });
+    }, opts.timeout);
     const out = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('').trim();
     if (!out) throw new Error('anthropic empty response');
     if (j.stop_reason === 'max_tokens') throw new Error('anthropic truncated response');
@@ -340,7 +432,8 @@ export function createAdapter(provider, key) {
   return new OpenAICompatAdapter(provider, key);
 }
 
-// 各家 API 的原始錯誤訊息很難懂，轉成使用者看得懂的說法
+// 各家 API 的原始錯誤訊息很難懂，轉成使用者看得懂的說法。
+// 認不出來就回 null，讓呼叫端決定要不要顯示原文——用白名單比對訊息內容太容易漏。
 export function friendlyError(msg, provider) {
   const m = String(msg || '');
   const name = PROVIDERS[provider]?.label || '這個服務商';
@@ -352,13 +445,20 @@ export function friendlyError(msg, provider) {
   if (/\b402\b|payment required|insufficient (credit|balance|funds)|negative credit/i.test(m))
     return `${name} 帳戶餘額不足，無法使用付費模型。請到 ${name} 後台儲值，`
       + '或到首頁的「模型設定」改選名稱結尾為 :free 的免費模型。';
+  // 免費模型是所有使用者共用一個上游流量池，被限流跟「你的額度用完」是兩回事
+  if (/rate.?limited upstream|temporarily rate.?limited/i.test(m))
+    return '這個免費模型目前使用的人太多（免費模型是所有人共用流量），暫時排不進去。'
+      + '請等一兩分鐘再試，或到「模型設定」換一個模型——免費模型本來就比較容易遇到這種情況。';
   if (/\b429\b|quota|rate limit|insufficient_quota/i.test(m))
     return `${name}的額度已用盡或觸發流量限制。請稍後再試，或到後台確認方案與餘額。`;
   if (/沒有可用的模型/.test(m))
     return `這把金鑰查不到任何可用的模型，請確認帳號是否已開通。`;
-  if (/fetch failed|timed out|ENOTFOUND|ECONNREFUSED/i.test(m))
+  if (/timed out|TimeoutError|aborted/i.test(m))
+    return '模型一直沒有回應。免費模型在忙碌時常會這樣，'
+      + '請到「模型設定」換一個模型（標 ★ 推薦的比較穩），或稍後再試。';
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED/i.test(m))
     return `連不上${name}的伺服器，請確認網路連線後再試一次。`;
-  return m;
+  return null;
 }
 
 // 錯誤訊息可能夾帶金鑰，回傳給前端前先洗掉
