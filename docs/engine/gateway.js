@@ -5,7 +5,8 @@
 export const PROVIDERS = {
   gemini: {
     label: 'Google Gemini', note: '有免費額度，中文與語音演練實測最佳',
-    hint: 'AIza… 開頭', url: 'https://aistudio.google.com/apikey', file: true, verified: true,
+    // 新版 AI Studio 金鑰不一定是 AIza 開頭，別把格式寫死免得誤導
+    hint: '從 AI Studio 複製的那一整串', url: 'https://aistudio.google.com/apikey', file: true, verified: true,
   },
   openai: {
     label: 'OpenAI', note: '需付費，品質穩定',
