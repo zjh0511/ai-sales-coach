@@ -23,6 +23,7 @@ function show(name) {
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
+  if (name === 'home') updateAccount();      // 回首頁時同步目前使用的模型
 }
 
 document.addEventListener('click', e => {
@@ -137,23 +138,31 @@ $('#lg-go').onclick = async () => {
   btn.disabled = false; btn.textContent = '驗證並登入';
 };
 
-function updateAccount() {
+// 首頁顯示目前的服務商與正在使用的模型，並提供明顯的入口去更換
+async function updateAccount() {
   const { provider } = cred();
-  const n = $('#home-acct'); n.innerHTML = '';
+  const box = $('#home-acct');
+  box.hidden = !provider;
+  $('#home-logout').hidden = !provider;
   if (!provider) return;
-  n.append(document.createTextNode(`AI 服務商：${PROVIDERS[provider]?.label || provider}　`));
-  const inline = (txt, fn) => {
-    const b = el('button', 'link', txt);
-    b.style.cssText = 'width:auto;display:inline;padding:0';
-    b.onclick = fn;
-    return b;
-  };
-  n.append(inline('模型設定', () => show('models')));
-  n.append(document.createTextNode('　'));
-  n.append(inline('登出／更換金鑰', () => {
-    if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout();
-  }));
+
+  $('#acct-provider').textContent = PROVIDERS[provider]?.label || provider;
+  $('#acct-fast').textContent = '演練模型　載入中…';
+  $('#acct-judge').textContent = '評分模型　載入中…';
+  try {
+    const st = await api('/models/status');
+    const tag = kind => (st.pinned[kind] ? '' : '（自動）');
+    $('#acct-fast').textContent = `演練模型　${st.active.fast || '—'}${tag('fast')}`;
+    $('#acct-judge').textContent = `評分模型　${st.active.judge || '—'}${tag('judge')}`;
+  } catch {
+    $('#acct-fast').textContent = '演練模型　—';
+    $('#acct-judge').textContent = '評分模型　—';
+  }
 }
+
+$('#home-logout').onclick = () => {
+  if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout();
+};
 
 // ── 模型設定 ────────────────────────────────────────────────
 const PIN_KEY = 'aicoach.models';
@@ -751,6 +760,7 @@ function renderHistory() {
 // ── 啟動 ────────────────────────────────────────────────────
 $('#btn-welcome').onclick = () => { localStorage.setItem('aicoach.seen', '1'); show('home'); };
 window.addEventListener('pagehide', abort);
+$('#home-acct').hidden = true; $('#home-logout').hidden = true;
 
 // 額度用盡自動降階時，讓使用者知道發生了什麼，而不是默默變慢或變差
 let lastEvt = 0;

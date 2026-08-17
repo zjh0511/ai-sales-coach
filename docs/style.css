@@ -33,6 +33,8 @@ h3{margin:0 0 6px;font-size:18px} h4{margin:0 0 8px;font-size:15px;color:var(--a
   border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px;color:var(--fg);font:inherit}
 .tile:active{background:#1c2430}
 .tile.off{opacity:.4}
+.tile.acct{margin-top:16px;align-items:flex-start}
+.tile.acct small{display:block;line-height:1.5}
 .t-ico{font-size:26px}
 .tile b{display:block;font-size:16px} .tile small{color:var(--muted);font-size:13px}
 
