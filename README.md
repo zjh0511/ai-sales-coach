@@ -135,6 +135,15 @@ node tools/selftest.mjs 5      # 只跑第 5 節
 
 ---
 
+## 文件
+
+| 文件 | 內容 |
+|---|---|
+| **[MD檔/11_IMPLEMENTATION_HANDBOOK.md](MD檔/11_IMPLEMENTATION_HANDBOOK.md)** | **V1 實作總結與延伸開發指南**——核心設計概念、踩過的坑與解法、原生 App 與本地模型的分階段計畫。**要接手或延伸開發請先讀這份。** |
+| [MD檔/01～04](MD檔/) | 產品規格、AI Coach Engine、模型架構、語音引擎（設計基準） |
+| [project/DECISION_LOG.md](project/DECISION_LOG.md) | D001～D020 決策紀錄，含當下理由與實測依據 |
+| [SHARE.md](SHARE.md) | 可直接複製給同事的使用說明 |
+
 ## 架構
 
 ```
