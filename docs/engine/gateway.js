@@ -21,8 +21,8 @@ export const PROVIDERS = {
     hint: 'gsk_… 開頭', url: 'https://console.groq.com/keys', file: false,
   },
   openrouter: {
-    label: 'OpenRouter', note: '一把金鑰可用多家模型',
-    hint: 'sk-or-… 開頭', url: 'https://openrouter.ai/keys', file: false,
+    label: 'OpenRouter', note: '一把金鑰可用多家模型，支援一鍵登入',
+    hint: 'sk-or-… 開頭', url: 'https://openrouter.ai/keys', file: false, verified: true, oauth: true,
   },
   deepseek: {
     label: 'DeepSeek', note: '價格低廉',
@@ -47,7 +47,13 @@ const PICK = {
   openai: { fast: [/mini/, /^gpt-/], judge: [/^gpt-5/, /^gpt-4\.1$/, /^gpt-4o$/, /^gpt-/] },
   anthropic: { fast: [/haiku/, /sonnet/], judge: [/sonnet/, /opus/, /haiku/] },
   groq: { fast: [/instant/, /8b/, /scout/, /llama/], judge: [/70b/, /versatile/, /llama/] },
-  openrouter: { fast: [/flash/, /mini/, /haiku/], judge: [/sonnet/, /gpt/, /pro/] },
+  // OpenRouter 有 400 多個模型，預設挑中文表現好且延遲低的；:free 模型實測中文品質差，不列入自動
+  openrouter: {
+    fast: [/^google\/gemini-[\d.]+-flash$/, /^anthropic\/claude-[\w.-]*-fast$/,
+      /^qwen\/qwen[\d.]+-flash$/, /^openai\/gpt-[\d.]+-mini$/, /flash$/, /mini$/],
+    judge: [/^anthropic\/claude-opus-[\d.]+$/, /^google\/gemini-[\d.]+-pro$/,
+      /^openai\/gpt-[\d.]+$/, /sonnet$/, /^google\/gemini-[\d.]+-flash$/],
+  },
   deepseek: { fast: [/chat/], judge: [/reasoner/, /chat/] },
 };
 
@@ -231,7 +237,8 @@ class OpenAICompatAdapter extends Base {
     const j = await this._fetch(`${this.base}/models`, { headers: this._headers });
     const names = (j.data || [])
       .map(m => ({ id: m.id, label: m.name || m.id }))
-      .filter(m => !/embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcribe/.test(m.id));
+      // :batch 是非同步批次介面，不能用在即時對話；其餘為非文字模型
+      .filter(m => !/embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcribe|:batch/.test(m.id));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');
     this._rank(names);
     return { fast: this.fast, judge: this.judge };
@@ -334,7 +341,11 @@ export function friendlyError(msg, provider) {
     return `金鑰無效。請確認你貼上的是完整的金鑰，而且上方選的服務商是「${name}」。`;
   if (/\b403\b|permission|not authorized|access denied/i.test(m))
     return `這把金鑰沒有使用權限。請到${name}後台確認金鑰狀態，或確認帳號是否已啟用付費。`;
-  if (/\b429\b|quota|rate limit|insufficient_quota|credit/i.test(m))
+  // 402 是「沒錢」，跟 429「用太快」完全不同，給的建議也不同
+  if (/\b402\b|payment required|insufficient (credit|balance|funds)|negative credit/i.test(m))
+    return `${name} 帳戶餘額不足，無法使用付費模型。請到 ${name} 後台儲值，`
+      + '或到首頁的「模型設定」改選名稱結尾為 :free 的免費模型。';
+  if (/\b429\b|quota|rate limit|insufficient_quota/i.test(m))
     return `${name}的額度已用盡或觸發流量限制。請稍後再試，或到後台確認方案與餘額。`;
   if (/沒有可用的模型/.test(m))
     return `這把金鑰查不到任何可用的模型，請確認帳號是否已開通。`;

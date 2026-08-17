@@ -1,5 +1,6 @@
 import { Voice, supported } from './voice.js';
 import { api, providers, restore, onModelEvent } from './engine/api.js';
+import { startOpenRouter, finishOpenRouter, oauthSupported } from './engine/oauth.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
@@ -56,6 +57,19 @@ let PROVIDERS = {};
 async function initLogin() {
   PROVIDERS = providers();
 
+  // 從 OpenRouter 授權頁導回時，網址會帶 ?code=，先換成金鑰
+  try {
+    const key = await finishOpenRouter();
+    if (key) {
+      localStorage.setItem(PROV_KEY, 'openrouter');
+      localStorage.setItem(AKEY_KEY, key);
+      localStorage.removeItem(PIN_KEY);
+    }
+  } catch (e) {
+    $('#lg-msg').className = 'note err';
+    $('#lg-msg').textContent = e.message;
+  }
+
   const sel = $('#lg-provider');
   sel.innerHTML = '';
   for (const [k, p] of Object.entries(PROVIDERS)) {
@@ -85,8 +99,18 @@ function syncProvider() {
   $('#lg-note').textContent = [p.note, p.hint ? `金鑰${p.hint}` : '', p.file ? '' : '（此服務商無法直接讀取 PDF）']
     .filter(Boolean).join('　·　');
   $('#lg-link').href = p.url || '#';
+  $('#lg-oauth').hidden = !(p.oauth && oauthSupported());
 }
 $('#lg-provider').onchange = syncProvider;
+
+$('#lg-oauth-go').onclick = async () => {
+  const b = $('#lg-oauth-go'); b.disabled = true; b.textContent = '前往 OpenRouter…';
+  try { await startOpenRouter(); }
+  catch (e) {
+    $('#lg-msg').className = 'note err'; $('#lg-msg').textContent = e.message;
+    b.disabled = false; b.textContent = '用 OpenRouter 帳號登入';
+  }
+};
 $('#lg-show').onchange = e => { $('#lg-key').type = e.target.checked ? 'text' : 'password'; };
 
 $('#lg-go').onclick = async () => {
@@ -134,6 +158,7 @@ function updateAccount() {
 // ── 模型設定 ────────────────────────────────────────────────
 const PIN_KEY = 'aicoach.models';
 const loadPin = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY)) || {}; } catch { return {}; } };
+let modelFilter = '';
 
 async function renderModels() {
   const b = $('#m-body'); b.innerHTML = '';
@@ -145,6 +170,15 @@ async function renderModels() {
   b.append(el('p', 'note',
     '「自動」會挑選延遲與品質最平衡的模型。若指定的模型額度用盡，系統仍會自動降階到下一個可用模型，'
     + '十分鐘後再回頭嘗試原本的模型，練習不會中斷。'));
+
+  // OpenRouter 有 400 多個模型，沒有搜尋根本找不到
+  if (st.models.length > 30) {
+    const f = el('input');
+    f.id = 'm-filter'; f.type = 'search'; f.placeholder = `搜尋模型（共 ${st.models.length} 個）`;
+    f.value = modelFilter;
+    f.oninput = () => { modelFilter = f.value; renderModels().then(() => $('#m-filter')?.focus()); };
+    b.append(f);
+  }
 
   const section = (title, hint, kind) => {
     const c = el('div', 'card');
@@ -174,22 +208,33 @@ async function renderModels() {
 
     c.append(row(null, '自動（推薦）', `目前會選 ${st.auto[kind] || '—'}`));
 
-    // 推薦順位排前面，其餘按名稱排序——20 個原始模型代號隨機排列沒人選得下去
+    // 推薦順位排前面，其餘按名稱排序——原始模型代號隨機排列沒人選得下去
     const rank = st.rank[kind] || [];
-    const sorted = [...st.models].sort((a, b) => {
-      const ra = rank.indexOf(a.id), rb = rank.indexOf(b.id);
-      if (ra !== rb) return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
-      return a.id.localeCompare(b.id);
-    });
+    const q = modelFilter.trim().toLowerCase();
+    let sorted = st.models
+      .filter(m => !q || m.id.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q))
+      .sort((a, b) => {
+        const ra = rank.indexOf(a.id), rb = rank.indexOf(b.id);
+        if (ra !== rb) return (ra < 0 ? 999 : ra) - (rb < 0 ? 999 : rb);
+        return a.id.localeCompare(b.id);
+      });
+
+    // 沒搜尋時不要一次塞幾百列，DOM 會很慢
+    const LIMIT = 30;
+    const hidden = Math.max(0, sorted.length - LIMIT);
+    if (!q && hidden) sorted = sorted.slice(0, LIMIT);
 
     for (const m of sorted) {
       const cd = cooling.get(m.id);
       c.append(row(m.id, m.id, [
         rank.includes(m.id) ? '★ 推薦' : null,
+        /:free$/.test(m.id) ? '免費' : null,
         m.label !== m.id ? m.label : null,
         cd ? `⚠️ 額度用盡，約 ${cd} 分鐘後恢復` : null,
       ].filter(Boolean).join('　·　')));
     }
+    if (hidden) c.append(el('p', 'note', `另有 ${hidden} 個模型未顯示，請用上方搜尋框尋找。`));
+    if (q && !sorted.length) c.append(el('p', 'note', '找不到符合的模型。'));
     return c;
   };
 

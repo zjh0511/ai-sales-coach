@@ -113,6 +113,8 @@ export async function api(path, body = {}) {
     if (e.auth) throw e;
     const safe = friendlyError(scrubKey(e.message, current.key), current.provider);
     // 金鑰相關問題要讓 UI 退回登入畫面
+    // 餘額不足不是金鑰問題，不該把使用者踢回登入畫面
+    if (/餘額不足/.test(safe)) throw new Error(safe);
     if (/金鑰|額度|權限/.test(safe)) { const err = new Error(safe); err.auth = true; throw err; }
     console.error(`[api] ${path} → ${safe.slice(0, 200)}`);
     throw new Error(

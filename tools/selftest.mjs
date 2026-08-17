@@ -10,10 +10,11 @@ import * as AD from '../docs/engine/advisor.js';
 import { checkCompliance } from '../docs/engine/compliance.js';
 import { officeText } from '../docs/engine/docx.js';
 import { scrubBrands } from '../docs/engine/prompts.js';
+import { loadKeys } from './keys.mjs';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const key = process.env.GEMINI_API_KEY
-  || fs.readFileSync(path.join(DIR, 'Gemini API Key.txt'), 'utf8').trim();
+const key = loadKeys().gemini;
+if (!key) { console.error('找不到 Gemini 金鑰。請在專案根目錄放「API Key.txt」，或設定 GEMINI_API_KEY。'); process.exit(1); }
 
 const ONLY = process.argv[2];                       // 例：node tools/selftest.mjs 5  只跑第 5 節
 const run = n => !ONLY || ONLY === String(n);

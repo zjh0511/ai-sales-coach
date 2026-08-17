@@ -283,3 +283,37 @@ API 原始順序把 `gemini-2.5-flash`、`gemma-4-26b` 排在前面，推薦的�
 
 **降階要讓使用者知道：** 新增 `onEvent` 回呼，額度用盡或改用備援模型時跳提示。
 原本只寫 console.warn，使用者只會感覺「今天怎麼變慢／變差」卻不知道原因。
+
+---
+
+## 2026-08-17｜D017 加入 OpenRouter 一鍵登入；NVIDIA 與 ChatGPT OAuth 確認不可行
+
+**實機驗證（瀏覽器直接呼叫）：**
+
+| 端點 | 結果 |
+|---|---|
+| OpenRouter `/api/v1/*` | ✅ `access-control-allow-origin: *` |
+| OpenRouter `/api/v1/auth/keys`（OAuth 換金鑰） | ✅ 允許 |
+| OpenAI `auth.openai.com/oauth/token`（登入） | ✅ 允許 |
+| **ChatGPT `chatgpt.com/backend-api/codex/*`（推論）** | ❌ 擋 CORS |
+| **NVIDIA `integrate.api.nvidia.com/v1/*`** | ❌ 完全無 CORS 標頭，`Failed to fetch` |
+
+**決策：**
+1. **加入 OpenRouter OAuth PKCE**（`docs/engine/oauth.js`）。PKCE 用一次性亂數取代 client secret，
+   全程瀏覽器完成，不需伺服器，符合 GitHub Pages 架構。
+2. **放棄 NVIDIA。** 不是沒做，是瀏覽器根本呼叫不到。加一個必定失敗的選項只會讓使用者困惑。
+3. **放棄 ChatGPT OAuth。** 登入那段可行，但拿到 token 後的推論端點擋 CORS，
+   必須自架伺服器代轉每一次呼叫——那會失去無冷啟動與零維護，且條款疑慮未解。
+
+**OpenRouter 的模型挑選問題：** 回傳 342 個模型（已濾掉 `:batch` 非同步介面）。
+・自動挑選改為明確偏好中文表現好的：`google/gemini-*-flash` → `anthropic/claude-*-fast`（角色扮演）、
+　`anthropic/claude-opus-*` → `google/gemini-*-pro`（評分）。
+・`:free` 模型不列入自動挑選——實測 `dots-3-note-preview:free` 回簡體中文、
+　`lfm-2.5-2.6b:free` 花 46 秒且中文破碎。但仍列在清單中並標「免費」，讓沒儲值的人能用。
+・模型清單超過 30 個時加入搜尋框，未搜尋時只顯示前 30 個，否則數百列 DOM 會很慢。
+
+**402 是新的錯誤類別。** 測試時 OpenRouter 餘額為 0，付費模型回 HTTP 402。
+原本沒處理，使用者只會看到「剛剛好像卡了一下」。現在區分：
+・402 餘額不足 → 明確告知去儲值或改選 `:free` 模型，**且不把使用者踢回登入畫面**（不是金鑰問題）
+・429 額度用盡 → 自動降階並冷卻 10 分鐘
+這兩者原因與解法完全不同，混在一起會給錯建議。

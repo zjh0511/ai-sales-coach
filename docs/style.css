@@ -122,6 +122,9 @@ select:focus{outline:none;border-color:var(--acc)}
 label.inline{display:flex;align-items:center;gap:8px;font-weight:400;color:var(--muted);font-size:13px;margin:10px 0 0}
 label.inline input{width:auto}
 #lg-msg{min-height:20px} #lg-msg.err{color:var(--bad)} #lg-msg.ok{color:var(--ok)}
+.or-sep{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:18px 0 0}
+.or-sep::before,.or-sep::after{content:"";flex:1;height:1px;background:var(--line)}
+#m-filter{margin-bottom:10px}
 a{color:var(--acc)}
 
 #toast{position:fixed;left:50%;bottom:calc(120px + var(--sb));transform:translateX(-50%);background:#000c;

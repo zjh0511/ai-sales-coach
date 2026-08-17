@@ -22,6 +22,12 @@
     <select id="lg-provider"></select>
     <p class="note" id="lg-note"></p>
 
+    <div id="lg-oauth" hidden>
+      <button class="btn primary" id="lg-oauth-go">用 OpenRouter 帳號登入</button>
+      <p class="note" style="text-align:center">不用複製貼上金鑰，登入後自動取得</p>
+      <div class="or-sep"><span>或手動貼上金鑰</span></div>
+    </div>
+
     <label>貼上你的 API 金鑰</label>
     <input id="lg-key" type="password" inputmode="text" autocomplete="off"
            autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在此貼上金鑰">
