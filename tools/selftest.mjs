@@ -11,6 +11,7 @@ import { checkCompliance } from '../docs/engine/compliance.js';
 import { officeText } from '../docs/engine/docx.js';
 import { scrubBrands } from '../docs/engine/prompts.js';
 import * as P from '../docs/engine/prompts.js';
+import { merge } from '../docs/engine/account.js';
 import { loadKeys } from './keys.mjs';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -68,6 +69,34 @@ if (run(1)) {
     ok(txt.length > 300, `PPTX 取字 ${txt.length} 字`);
     ok((txt.match(/【第 \d+ 頁】/g) || []).length >= 10, `分頁正確 ${(txt.match(/【第 \d+ 頁】/g) || []).length} 頁`);
   } else console.log('  --  找不到範例 PPTX，略過');
+  // 雲端同步的合併規則。這是整個帳號功能唯一會「弄丟使用者資料」的地方，
+  // 而且出錯時很安靜——紀錄少了幾筆，使用者通常不會察覺。
+  console.log('\n=== 1e. 雲端同步合併 ===');
+  {
+    const A = { history: [{ at: 300, name: '手機A' }, { at: 100, name: '共同' }], prefs: { diff: '1', updatedAt: 50 } };
+    const B = { history: [{ at: 200, name: '電腦B' }, { at: 100, name: '共同' }], prefs: { diff: '4', updatedAt: 90 } };
+
+    const m = merge(A, B);
+    ok(m.history.length === 3, '兩台裝置的紀錄取聯集（3 筆）', String(m.history.length));
+    ok(m.history.map(h => h.at).join(',') === '300,200,100', '依時間新到舊排序');
+    ok(m.history.filter(h => h.at === 100).length === 1, '同一筆紀錄不會重複');
+    ok(m.prefs.diff === '4', 'updatedAt 較晚的偏好設定勝出');
+    ok(merge(B, A).prefs.diff === '4', '換邊呼叫結果相同（合併沒有方向性）');
+
+    // 第一次登入：雲端還沒有資料，本機的東西不能被清掉
+    ok(merge(A, null).history.length === 2, '雲端為空時保留本機全部紀錄');
+    ok(merge(null, B).history.length === 2, '本機為空時完整拉下雲端紀錄');
+    ok(merge(null, null).history.length === 0, '兩邊都空不會炸');
+
+    // 壞資料不能讓同步整個停擺
+    ok(merge({ history: [null, { name: '沒有 at' }, { at: 7 }] }, {}).history.length === 1,
+       '沒有時間戳的壞紀錄被略過');
+
+    // 上限：不能無限成長把 localStorage 撐爆
+    const cap = merge({ history: Array.from({ length: 150 }, (_, i) => ({ at: i + 1 })) }, {});
+    ok(cap.history.length === 100, '紀錄上限 100 筆', String(cap.history.length));
+    ok(cap.history[0].at === 150, '超過上限時保留最新的，丟掉最舊的');
+  }
 }
 
 const models = await gw.init();

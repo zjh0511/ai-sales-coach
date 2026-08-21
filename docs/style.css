@@ -132,6 +132,13 @@ a{color:var(--acc)}
 .btn.guide-link{display:block;text-align:center;text-decoration:none;margin-top:10px;
   border-color:var(--acc);color:var(--acc)}
 #install-card h4{margin-bottom:4px}
+.gbox{display:flex;justify-content:center;min-height:44px}
+.btn.apple{background:#000;border-color:#333;color:#fff;margin-top:10px}
+.who-line{margin:16px 0 6px;display:flex;align-items:center;gap:8px}
+.who-line b{color:var(--fg);font-weight:600}
+.sync{font-size:11px;border-radius:4px;padding:1px 7px;background:#123021;color:#4ade80}
+.sync.off{background:#3a1f12;color:#fb923c}
+.sync.busy{background:#1e2a3a;color:#93c5fd}
 
 #toast{position:fixed;left:50%;bottom:calc(120px + var(--sb));transform:translateX(-50%);background:#000c;
   border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:14px;opacity:0;

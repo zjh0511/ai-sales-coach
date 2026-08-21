@@ -17,6 +17,43 @@
 </head>
 <body>
 
+<!-- 註冊／登入帳號：只用來同步訓練紀錄與偏好，與 API 金鑰無關 -->
+<section id="s-auth" class="screen">
+  <div class="pad scroll">
+    <h1 class="brand">AI業務教練</h1>
+    <p class="sub">豪老師 Hao+</p>
+
+    <div id="au-google" class="gbox"></div>
+    <button class="btn apple" id="au-apple" hidden> 用 Apple 帳號繼續</button>
+
+    <div class="or-sep"><span>或用 E-mail</span></div>
+
+    <label>E-mail</label>
+    <input id="au-email" type="email" inputmode="email" autocomplete="email"
+           autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="you@example.com">
+    <label>密碼<small>至少 6 個字</small></label>
+    <input id="au-pw" type="password" autocomplete="current-password" placeholder="輸入密碼">
+    <p class="note" id="au-msg"></p>
+
+    <div class="two-links">
+      <button class="link" id="au-up">註冊新帳號</button>
+      <button class="link" id="au-reset">忘記密碼</button>
+    </div>
+
+    <div class="card sm">
+      <p class="note" style="margin:0">
+        登入只用來<b>同步你的訓練紀錄與偏好設定</b>，換手機或換電腦時進步曲線接得起來。<br>
+        <b>API 金鑰與你上傳的教材、保單條款不會上雲端</b>，只留在這台裝置。
+      </p>
+    </div>
+    <button class="link" id="au-skip">先不要登入，直接使用 →</button>
+    <p class="note" style="text-align:center">
+      還沒有 AI API 金鑰？<a href="guide.html">看免費申請教學</a>
+    </p>
+  </div>
+  <div class="foot"><button class="btn primary" id="au-in">登入</button></div>
+</section>
+
 <!-- 登入：選擇 AI 服務商並輸入自己的金鑰 -->
 <section id="s-login" class="screen">
   <div class="pad scroll">
@@ -88,6 +125,7 @@
       <button class="link" data-go="history">我的訓練紀錄</button>
     </div>
 
+    <p class="muted who-line" id="home-who" hidden></p>
     <button class="tile acct" id="home-acct" data-go="models">
       <span class="t-ico">⚙️</span>
       <span>
@@ -97,7 +135,10 @@
         <small id="acct-judge">—</small>
       </span>
     </button>
-    <button class="link" id="home-logout">登出／更換金鑰</button>
+    <div class="two-links">
+      <button class="link" id="home-logout">登出／更換金鑰</button>
+      <button class="link" id="home-signout" hidden>登出帳號</button>
+    </div>
 
     <div class="card sm" id="install-card" hidden>
       <h4>把它放到手機桌面</h4>

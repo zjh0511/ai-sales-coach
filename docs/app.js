@@ -1,6 +1,7 @@
 import { Voice, supported, voiceInfo } from './voice.js';
 import { api, providers, restore, onModelEvent } from './engine/api.js';
 import { startOpenRouter, finishOpenRouter, oauthSupported } from './engine/oauth.js';
+import * as acct from './engine/account.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
@@ -23,7 +24,7 @@ function show(name) {
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
-  if (name === 'home') { updateAccount(); checkResume(); showInstallCard(); }
+  if (name === 'home') { updateAccount(); checkResume(); showInstallCard(); updateWho(); }
 }
 
 document.addEventListener('click', e => {
@@ -231,7 +232,7 @@ function loadPin() {
   } catch { /* 格式壞掉就當沒設定 */ }
   return null;
 }
-const savePin = m => m ? localStorage.setItem(PIN_KEY, JSON.stringify(m)) : localStorage.removeItem(PIN_KEY);
+const savePin = m => { m ? localStorage.setItem(PIN_KEY, JSON.stringify(m)) : localStorage.removeItem(PIN_KEY); savePrefs({}); };
 
 async function renderModels() {
   const b = $('#m-body'); b.innerHTML = '';
@@ -362,6 +363,9 @@ function openIntake(fn) {
   $('#i-product').hidden = fn !== 'product';
   if (fn === 'product' && S.doc) $('#i-product-name').textContent = S.doc.title;
   $('#btn-go').textContent = fn === 'pain' ? '分析痛點' : '建立客戶';
+  const p = prefs();                       // 沿用上次的難度與情境，不用每次重選
+  if (p.diff) setChip('#f-diff', p.diff);
+  if (p.ctx) setChip('#f-ctx', p.ctx);
   syncDifficulty();
   show('intake');
 }
@@ -374,6 +378,15 @@ for (const id of ['#f-gender', '#f-diff', '#f-ctx']) {
   });
 }
 const pick = id => $(id).querySelector('.chip.on')?.dataset.v;
+const setChip = (id, v) => { const c = v && $(id).querySelector(`.chip[data-v="${v}"]`); if (c) c.click(); };
+
+// 偏好設定。原本難度與情境每次都要重選，新進夥伴常常忘了調回「新手友善」。
+const PREFS_KEY = 'aicoach.prefs';
+const prefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; } };
+function savePrefs(p) {
+  localStorage.setItem(PREFS_KEY, JSON.stringify({ ...prefs(), ...p, updatedAt: Date.now() }));
+  syncSoon();
+}
 
 // 讓使用者選難度前就知道會遇到什麼樣的客戶
 const DIFF_HINT = {
@@ -405,6 +418,7 @@ $('#btn-go').onclick = async () => {
       ...customer, mode: S.fn, difficulty: pick('#f-diff'), docId: S.doc?.id,
       context: pick('#f-ctx'), contextNote: $('#f-ctxnote').value.trim(),
     });
+    savePrefs({ diff: pick('#f-diff'), ctx: pick('#f-ctx') });
     S.sessionId = d.sessionId; S.persona = d.persona; S.ended = false;
     $('#b-title').textContent = MODE_TITLE[S.fn] || '演練前準備';
     $('#b-name').textContent = d.persona.name;
@@ -830,6 +844,7 @@ function saveHistory(fb) {
       summary: fb.summary, next: fb.next_challenge,
     });
     localStorage.setItem(LS, JSON.stringify(h.slice(0, 50)));
+    syncSoon();
   } catch { /* 容量滿時忽略 */ }
 }
 
@@ -862,6 +877,144 @@ function renderHistory() {
   b.append(clr);
 }
 
+
+
+// ── 帳號與雲端同步 ──────────────────────────────────────────
+// 沒填 firebase-config.js 時整段自動關閉，App 行為與加入帳號功能之前完全相同。
+// 同步只涵蓋「訓練紀錄」與「偏好設定」；API 金鑰與上傳的文件永遠留在本機。
+const SKIP_KEY = 'aicoach.noacct';
+let syncBadge = null, syncing = false, syncTimer;
+
+function bundle() {
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(LS) || '[]'); } catch { /* 壞資料當空的 */ }
+  const p = prefs();
+  return {
+    history,
+    prefs: {
+      diff: p.diff || '', ctx: p.ctx || '',
+      provider: localStorage.getItem(PROV_KEY) || '',
+      models: localStorage.getItem(PIN_KEY) || '',
+      updatedAt: p.updatedAt || 0,
+    },
+  };
+}
+
+function applyBundle(b) {
+  try { localStorage.setItem(LS, JSON.stringify((b.history || []).slice(0, 50))); } catch { /* 容量滿 */ }
+  const p = b.prefs || {};
+  // 模型指定只在「服務商相同」時才套用——別家的模型名稱放進來是無效的，
+  // 會讓使用者在新裝置上看到一個根本不存在的模型。
+  if (p.models && p.provider && p.provider === localStorage.getItem(PROV_KEY)) {
+    localStorage.setItem(PIN_KEY, p.models);
+  }
+  localStorage.setItem(PREFS_KEY, JSON.stringify({
+    diff: p.diff || '', ctx: p.ctx || '', updatedAt: p.updatedAt || 0,
+  }));
+}
+
+function setSync(state) {
+  if (!syncBadge) return;
+  const M = { busy: ['sync busy', '同步中…'], ok: ['sync', '已同步'], err: ['sync off', '同步失敗'] };
+  const [cls, txt] = M[state] || M.ok;
+  syncBadge.className = cls;
+  syncBadge.textContent = txt;
+}
+
+// 同步失敗絕對不能擋住任何功能——練習比同步重要。
+async function syncNow(loud = false) {
+  if (!acct.configured() || !acct.user() || syncing) return;
+  syncing = true; setSync('busy');
+  try {
+    const merged = acct.merge(bundle(), await acct.pull());
+    applyBundle(merged);
+    await acct.push(merged);
+    setSync('ok');
+    if (loud) toast('已與雲端同步，共 ' + merged.history.length + ' 筆紀錄');
+  } catch (e) {
+    setSync('err');
+    if (loud) toast(e.message);
+  }
+  syncing = false;
+}
+const syncSoon = () => { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 2500); };
+
+function updateWho() {
+  const u = acct.user();
+  const line = $('#home-who');
+  $('#home-signout').hidden = !u;
+  line.hidden = !u;
+  syncBadge = null;
+  if (!u) return;
+  line.innerHTML = '';
+  line.append(el('span', null, '👤'), el('b', null, u.name || u.email));
+  syncBadge = el('span', 'sync', '已同步');
+  line.append(syncBadge);
+}
+
+// ── 註冊／登入畫面 ──────────────────────────────────────────
+const authMsg = (cls, t) => { $('#au-msg').className = 'note ' + cls; $('#au-msg').textContent = t; };
+
+async function afterAuth() {
+  updateWho();
+  await syncNow(true);          // 先把雲端資料拉下來，再進金鑰流程（模型指定才會生效）
+  await initLogin();
+  updateAccount(); showInstallCard(); handleShortcut();
+}
+
+function initAuth() {
+  $('#au-apple').hidden = !acct.appleReady();
+  if (acct.googleReady()) {
+    acct.googleButton($('#au-google'), (e, u) => e ? authMsg('err', e.message) : afterAuth())
+      .catch(e => authMsg('err', e.message));
+  } else {
+    $('#au-google').hidden = true;
+  }
+}
+
+const emailPw = () => [$('#au-email').value.trim(), $('#au-pw').value];
+
+async function emailAuth(btn, label, fn) {
+  const [email, pw] = emailPw();
+  if (!email) return authMsg('err', '請先輸入 E-mail');
+  btn.disabled = true; btn.textContent = '處理中…';
+  authMsg('', '');
+  try { await fn(email, pw); await afterAuth(); }
+  catch (e) { authMsg('err', e.message); }
+  btn.disabled = false; btn.textContent = label;
+}
+
+$('#au-in').onclick = () => emailAuth($('#au-in'), '登入', acct.signInEmail);
+$('#au-up').onclick = () => emailAuth($('#au-up'), '註冊新帳號', acct.signUpEmail);
+$('#au-pw').addEventListener('keydown', e => { if (e.key === 'Enter') $('#au-in').click(); });
+
+$('#au-reset').onclick = async () => {
+  const [email] = emailPw();
+  if (!email) return authMsg('err', '請先輸入 E-mail，重設信會寄到這個地址');
+  try { await acct.resetEmail(email); authMsg('ok', '重設密碼的信已寄出，請到信箱收信'); }
+  catch (e) { authMsg('err', e.message); }
+};
+
+$('#au-apple').onclick = async () => {
+  try { await acct.signInApple(); await afterAuth(); }
+  catch (e) { authMsg('err', e.message); }
+};
+
+// 刻意留一條「不登入也能用」的路。登入守不住純前端的任何東西，
+// 把它做成強制關卡只會在自己壞掉的時候把所有人鎖在外面。
+$('#au-skip').onclick = async () => {
+  localStorage.setItem(SKIP_KEY, '1');
+  await initLogin();
+  updateAccount(); showInstallCard(); handleShortcut();
+};
+
+$('#home-signout').onclick = () => {
+  if (!confirm('登出帳號後就不再同步，本機的訓練紀錄會保留。確定登出？')) return;
+  acct.signOut();
+  localStorage.setItem(SKIP_KEY, '1');   // 免得下次開啟又被擋在登入頁
+  updateWho();
+  toast('已登出帳號，紀錄仍保留在這台裝置');
+};
 
 // ── PWA：註冊 Service Worker 與「加到主畫面」──────────────────
 // SW 只負責讓 App 可安裝並在離線時開得起來；演練需要呼叫 AI API，那一定要網路。
@@ -943,4 +1096,13 @@ onModelEvent(e => {
   else if (e.type === 'fallback') toast(`目前改用 ${e.to}`, 3000);
 });
 
-initLogin().then(() => { updateAccount(); showInstallCard(); handleShortcut(); });
+async function boot() {
+  if (acct.configured() && !acct.user() && !localStorage.getItem(SKIP_KEY)) {
+    initAuth();
+    return show('auth');
+  }
+  if (acct.user()) { updateWho(); syncNow(); }
+  await initLogin();
+  updateAccount(); showInstallCard(); handleShortcut();
+}
+boot();

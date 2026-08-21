@@ -34,8 +34,19 @@
 - **沒有冷啟動**，打開就能用
 - **金鑰只存在你的裝置**，不會傳給任何人
 - **上傳的文件存在你自己的瀏覽器**（IndexedDB），永久保留，不會因為服務重啟而消失
-- **訓練紀錄也存在本機**，換裝置不會同步
-- 專案維護者看不到你的任何資料
+- **訓練紀錄預設也存在本機**
+
+### 選配：帳號同步
+
+如果專案擁有者設定了 Firebase（見 [account-setup.html](docs/account-setup.html)），
+會多出一個註冊／登入畫面，可以用 **Google 帳號**或 **E-mail** 登入，
+**訓練紀錄與偏好設定**就會跟著人跑，換手機、換電腦都接得起來。
+
+- **API 金鑰、上傳的教材與保單條款永遠不上雲端**，這是程式碼層面的限制，不是設定選項
+- 開啟同步後，訓練紀錄會經過 Google 的伺服器；資料庫擁有者在後台看得到，**這一點應事先告知使用者**
+- 登入畫面永遠有「先不要登入，直接使用」的出口，不登入功能完全不受影響
+- Apple 登入需要付費的 Apple Developer 帳號（Apple 的規定），程式碼已備好但預設關閉
+- 沒有設定 Firebase 時，登入畫面不會出現，App 行為與加入這個功能之前完全相同
 
 ---
 
@@ -163,6 +174,11 @@ node tools/selftest.mjs 5      # 只跑第 5 節
 docs/                  ← GitHub Pages 網站根目錄
   index.html
   app.js               畫面流程
+  guide.html           API 金鑰申請教學
+  account-setup.html   帳號同步設定教學（給專案擁有者）
+  firebase-config.js   帳號同步設定值（留空＝關閉帳號功能）
+  sw.js                Service Worker（PWA，network-first）
+  manifest.webmanifest PWA 設定：圖示與桌面捷徑
   voice.js             Voice Engine（STT/TTS 抽象層，可整檔替換 Provider）
   engine/
     api.js             本地 API 層（與舊伺服器版同介面，可再切回伺服器架構）
@@ -173,6 +189,7 @@ docs/                  ← GitHub Pages 網站根目錄
     knowledge.js       Knowledge Engine：文件 → 結構化知識庫
     docx.js            ZIP+XML 解析（DecompressionStream，零外部相依）
     store.js           IndexedDB 儲存層（Node 下自動退回記憶體版）
+    account.js         帳號與雲端同步（Firebase REST，無 SDK；未設定時整段關閉）
     compliance.js      Compliance Engine（規則優先，不依賴 LLM 判斷）
 tools/
   serve.mjs            本機開發用靜態伺服器

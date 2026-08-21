@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>帳號同步設定教學｜AI業務教練</title>
+<link rel="stylesheet" href="style.css">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  body{overflow:auto}
+  .page{max-width:760px;margin:0 auto;padding:20px 20px calc(40px + env(safe-area-inset-bottom));
+    padding-top:calc(20px + env(safe-area-inset-top))}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
+  .step > .n{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+    border-radius:50%;background:var(--acc);color:#fff;font-weight:700;font-size:14px;margin-right:8px}
+  .step h3{display:inline;font-size:17px;vertical-align:middle}
+  .step p,.step ul,.step ol{margin:10px 0 0}
+  .step .do{background:#0f1a2e;border-left:3px solid var(--acc);padding:10px 12px;border-radius:8px;margin-top:10px}
+  .step .warn{background:#1c1809;border-left:3px solid var(--warn);padding:10px 12px;border-radius:8px;margin-top:10px}
+  .big{display:block;text-align:center;background:var(--acc);color:#fff;border-radius:12px;
+    padding:15px;font-weight:600;text-decoration:none;margin:16px 0}
+  .faq{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+  .faq b{color:var(--fg)}
+  code{background:#0b1220;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13px}
+  pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:12px;overflow-x:auto;font-size:13px}
+  .back-link{display:inline-block;margin-bottom:6px;color:var(--acc);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="page">
+
+<a class="back-link" href="./">← 回 AI業務教練</a>
+<h1 style="font-size:24px;margin:6px 0 4px">帳號同步設定</h1>
+<p class="muted" style="margin:0 0 6px">
+  做完之後，使用者就能用 <b>Google 帳號</b>或 <b>E-mail</b> 註冊登入，
+  訓練紀錄與偏好設定會跟著人跑，換手機、換電腦都接得起來。
+</p>
+
+<div class="card warn">
+  <p style="margin:0"><b>這件事只有你（專案擁有者）需要做一次，而且只有你能做</b>——
+  要用你的 Google 帳號進 Firebase 後台。大約十分鐘。</p>
+  <p class="note" style="margin:8px 0 0">
+    在設定完成之前，App 完全正常運作，只是不會出現註冊／登入畫面。
+    這是刻意的：沒設定好就跳出一個壞掉的登入頁，比沒有登入頁更糟。
+  </p>
+</div>
+
+<h2 style="font-size:19px;margin:24px 0 0">先講清楚會付出什麼</h2>
+<div class="card">
+  <p><b>費用：</b>Firebase 的免費方案（Spark）對一個業務團隊來說綽綽有餘——
+  Realtime Database 免費額度是 1GB 儲存、每月 10GB 傳輸，而我們一個人的資料
+  大概只有幾十 KB。不需要綁信用卡。</p>
+  <p><b>隱私：</b>一旦開啟帳號同步，<b>訓練紀錄與偏好設定會經過 Google 的伺服器</b>。
+  README 原本寫的「沒有後端、不收集任何資料」在同步開啟後就不再完全成立，
+  這一點必須對同事說清楚。</p>
+  <p><b>不會上雲端的東西：</b>API 金鑰、以及上傳的教材與保單條款，
+  一律只留在使用者自己的裝置。這是程式碼層面的限制，不是設定選項。</p>
+</div>
+
+<h2 style="font-size:19px;margin:24px 0 0">設定步驟</h2>
+
+<div class="step">
+  <span class="n">1</span><h3>建立 Firebase 專案</h3>
+  <a class="big" href="https://console.firebase.google.com/" target="_blank" rel="noopener">開啟 Firebase 主控台 →</a>
+  <p>用你的 Google 帳號登入 → <b>建立專案</b> → 名稱隨意（例如 <code>ai-sales-coach</code>）。</p>
+  <div class="do">中途問「要不要啟用 Google Analytics」時<b>選「不要」</b>。我們不需要，
+  而且開了就會開始收集使用者行為資料。</div>
+</div>
+
+<div class="step">
+  <span class="n">2</span><h3>加入一個「網頁應用程式」，抄下 apiKey</h3>
+  <p>專案首頁中間有一排圖示，點那個 <b>&lt;/&gt;</b>（網頁）→ 取個暱稱 → <b>註冊應用程式</b>。</p>
+  <p>接著會顯示一段 <code>firebaseConfig</code> 程式碼。<b>只需要其中的 <code>apiKey</code></b>，
+  長得像 <code>AIzaSy...</code>，把它整串複製下來。</p>
+  <div class="do">「不要設定 Firebase Hosting」——我們的網站放在 GitHub Pages。</div>
+</div>
+
+<div class="step">
+  <span class="n">3</span><h3>開啟 Realtime Database，抄下網址</h3>
+  <p>左側選單 <b>建構 → Realtime Database</b> → <b>建立資料庫</b>。</p>
+  <ul>
+    <li>位置選 <b>Singapore (asia-southeast1)</b>，台灣連線最快</li>
+    <li>安全規則先選 <b>鎖定模式</b>（下一步會換成正確的規則）</li>
+  </ul>
+  <p>建好之後上方會有一行網址，長得像
+  <code>https://你的專案-default-rtdb.asia-southeast1.firebasedatabase.app</code>，複製下來。</p>
+</div>
+
+<div class="step">
+  <span class="n">4</span><h3>設定安全規則（這一步最重要）</h3>
+  <p>在 Realtime Database 頁面點 <b>規則</b> 分頁，把內容整段換成：</p>
+<pre>{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      }
+    }
+  }
+}</pre>
+  <p>按 <b>發布</b>。</p>
+  <div class="warn"><b>不要用「測試模式」的規則。</b>測試模式是「任何人都能讀寫全部資料」，
+  等於把所有同事的訓練紀錄公開在網路上。上面這段規則的意思是：
+  每個人只讀寫得到自己那一份，別人的看不到也改不了。</div>
+</div>
+
+<div class="step">
+  <span class="n">5</span><h3>開啟登入方式</h3>
+  <p>左側 <b>建構 → Authentication</b> → <b>開始使用</b>，然後在<b>登入方式</b>分頁啟用：</p>
+  <ul>
+    <li><b>電子郵件／密碼</b> — 直接啟用就好</li>
+    <li><b>Google</b> — 啟用，並填一個「專案的公開名稱」（使用者授權時會看到）</li>
+  </ul>
+  <p>再到 <b>設定 → 已授權網域</b>，確認清單裡有 <code>zjh0511.github.io</code>。
+  沒有就手動加上去。</p>
+  <div class="warn"><b>Apple 先跳過。</b>Apple 登入需要付費的 Apple Developer 帳號
+  （約 NT$3,300／年）才能申請憑證，這是 Apple 的規定。買了之後再回來啟用。</div>
+</div>
+
+<div class="step">
+  <span class="n">6</span><h3>取得 Google 登入用的用戶端 ID</h3>
+  <p>啟用 Google 登入時，Firebase 會自動幫你建一組 OAuth 用戶端。到
+  <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud 憑證頁</a>，
+  在上方確認選的是同一個專案，找到 <b>OAuth 2.0 用戶端 ID</b> 底下那筆
+  「Web client (auto created by Google Service)」，點進去：</p>
+  <ul>
+    <li><b>已授權的 JavaScript 來源</b>加入 <code>https://zjh0511.github.io</code></li>
+    <li>複製上方的<b>用戶端 ID</b>，長得像 <code>1234-abcd.apps.googleusercontent.com</code></li>
+  </ul>
+  <div class="do">要在本機測試的話，把 <code>http://localhost:8444</code> 也加進「已授權的 JavaScript 來源」。</div>
+</div>
+
+<div class="step">
+  <span class="n">7</span><h3>把三個值填進 firebase-config.js</h3>
+  <p>編輯 <code>docs/firebase-config.js</code>：</p>
+<pre>export const FB = {
+  apiKey: 'AIzaSy...',                                    // 步驟 2
+  dbUrl: 'https://xxx-default-rtdb.asia-southeast1.firebasedatabase.app',  // 步驟 3
+  googleClientId: '1234-abcd.apps.googleusercontent.com', // 步驟 6
+  appleClientId: '',
+  apple: false,
+};</pre>
+  <p>存檔 → commit → push。GitHub Pages 部署完成後，網站就會出現註冊／登入畫面。</p>
+  <div class="do">這三個值是<b>公開資訊</b>，放進公開的原始碼是正常的，Google 的文件也是這樣寫。
+  真正的保護來自步驟 4 的安全規則。</div>
+</div>
+
+<h2 style="font-size:19px;margin:26px 0 0">常見問題</h2>
+<div class="card">
+  <p class="faq"><b>設定錯了會怎樣？</b><br>
+  登入會失敗並顯示原因，但 App 其他功能完全不受影響——登入畫面上永遠有一個
+  「先不要登入，直接使用」的出口。登入是加分項，不是關卡。</p>
+
+  <p class="faq"><b>同事一定要註冊嗎？</b><br>
+  不用。不登入就跟現在一樣，紀錄存在自己的瀏覽器裡，只是換裝置不會同步。</p>
+
+  <p class="faq"><b>我看得到同事的訓練紀錄嗎？</b><br>
+  在 Firebase 後台可以（資料庫擁有者看得到全部資料）。<b>這件事應該事先告知同事。</b>
+  如果不希望自己看得到，就不要開啟帳號同步。</p>
+
+  <p class="faq"><b>API 金鑰會被同步嗎？</b><br>
+  不會。金鑰與上傳的文件寫死在程式碼裡不上傳，只有訓練紀錄與偏好設定會同步。
+  所以每台新裝置第一次還是要貼一次金鑰，之後就記住了。</p>
+
+  <p class="faq"><b>免費額度會不會爆掉？</b><br>
+  一個人的紀錄大約幾十 KB，上限是每人 100 筆。就算五十個同事都在用，
+  離 1GB 還很遠。真的接近了 Firebase 會先寄信通知。</p>
+
+  <p class="faq"><b>想關掉帳號功能怎麼辦？</b><br>
+  把 <code>firebase-config.js</code> 的 <code>apiKey</code> 清空再 push，
+  登入畫面就會消失，App 回到純本機模式。已同步的資料還在雲端，不會消失。</p>
+</div>
+
+<p class="note" style="text-align:center;margin-top:26px">
+  <a href="./">← 回 AI業務教練</a>　·　<a href="guide.html">API 金鑰申請教學</a>
+</p>
+
+</div>
+</body>
+</html>
