@@ -34,3 +34,8 @@ desktop.ini
 報表/
 *_成員總表.csv
 *_演練明細.csv
+
+# Firebase 服務帳戶金鑰：洩漏等於整個專案的資料外洩
+*serviceAccount*.json
+*service-account*.json
+sa-key*.json
