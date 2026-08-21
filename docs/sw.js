@@ -10,7 +10,7 @@
 // 注意：離線時只有「介面」打得開。演練需要呼叫 AI 服務商的 API，
 //   那一定要網路。這一點會在畫面上明確告知，不假裝可以離線練習。
 
-const VERSION = 'v4';                 // 改版時遞增，activate 時會清掉舊快取
+const VERSION = 'v5';                 // 改版時遞增，activate 時會清掉舊快取
 const CACHE = `aicoach-${VERSION}`;
 
 // 應用外殼：離線時要能顯示介面與說明
@@ -51,7 +51,14 @@ self.addEventListener('fetch', e => {
 
   e.respondWith((async () => {
     try {
-      const fresh = await fetch(req);
+      // cache: 'no-cache' 不是多餘的保險，是這裡的重點。
+      // 普通的 fetch() 會經過瀏覽器的 HTTP 快取，而 GitHub Pages 送的是
+      // max-age=600——所以「network-first」原本只繞過 SW 快取，使用者仍可能
+      // 拿到十分鐘前的舊模組。實際踩過：改了 firebase-config.js 並部署完成後，
+      // 頁面載到的模組還是舊的空值，Google 登入按鈕因此沒出現。
+      // no-cache 會發出帶 If-None-Match 的條件請求：沒改就回 304（很便宜），
+      // 改了就一定拿到新的。這是刻意用少量往返換「絕不吃到舊版」。
+      const fresh = await fetch(req.url, { cache: 'no-cache' });
       if (fresh && fresh.ok) {
         const c = await caches.open(CACHE);
         c.put(req, fresh.clone()).catch(() => {});
