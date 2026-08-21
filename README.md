@@ -55,8 +55,21 @@ https://zjh0511.github.io/ai-sales-coach/
 
 ### 3. 加入主畫面（建議）
 
-iPhone：Safari 開啟 → 點下方分享鍵 → 「加入主畫面」，之後從桌面圖示開啟，
-會是全螢幕，用起來就像一般 App。
+這是一個 **PWA**，可以裝到桌面當成獨立 App 使用：
+
+- **iPhone／iPad**：Safari 開啟 → 分享鍵 → 「加入主畫面」
+- **Android／桌面 Chrome**：首頁下方會出現「加到主畫面」按鈕，或用網址列的安裝圖示
+
+裝好之後從桌面圖示開啟是全螢幕、沒有網址列，長按圖示還有捷徑可以直接跳到
+電話邀約／發掘需求／痛點分析。
+
+**離線時介面打得開，但演練需要網路**——AI 回應必須連到服務商的 API。
+
+### 不會用 API 金鑰？
+
+登入畫面上有【📖 Google AI Studio，免費 API 申請教學】，
+四個步驟＋六個常見問題，全程免費、不需要信用卡。
+也可以直接開：[guide.html](https://zjh0511.github.io/ai-sales-coach/guide.html)
 
 ---
 

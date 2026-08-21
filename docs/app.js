@@ -23,7 +23,7 @@ function show(name) {
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
-  if (name === 'home') { updateAccount(); checkResume(); }   // 回首頁時同步模型與中斷的演練
+  if (name === 'home') { updateAccount(); checkResume(); showInstallCard(); }
 }
 
 document.addEventListener('click', e => {
@@ -862,6 +862,69 @@ function renderHistory() {
   b.append(clr);
 }
 
+
+// ── PWA：註冊 Service Worker 與「加到主畫面」──────────────────
+// SW 只負責讓 App 可安裝並在離線時開得起來；演練需要呼叫 AI API，那一定要網路。
+// isSecureContext 才對——http://localhost 也是安全來源，SW 在那裡同樣能註冊（本機測試需要）
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('sw.js').catch(() => { /* 不支援就算了，功能不受影響 */ });
+}
+
+const INSTALL_KEY = 'aicoach.installhint';
+const standalone = () =>
+  window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();                     // 由我們自己決定何時提示
+  installEvent = e;
+  showInstallCard();
+});
+
+function showInstallCard() {
+  const card = $('#install-card');
+  if (!card) return;
+  // 已經是獨立 App、或使用者說過別再提醒，就不出現
+  if (standalone() || localStorage.getItem(INSTALL_KEY)) { card.hidden = true; return; }
+
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  if (installEvent) {
+    $('#install-how').textContent = '裝好之後從桌面圖示開啟，會像一般 App 一樣全螢幕，不會有瀏覽器網址列。';
+    $('#install-go').hidden = false;
+  } else if (ios) {
+    // iOS Safari 沒有 beforeinstallprompt，只能教使用者手動加
+    $('#install-how').textContent = 'iPhone／iPad：點瀏覽器下方（或右上）的分享鍵 → 選「加入主畫面」。之後從桌面圖示開啟就是全螢幕。';
+    $('#install-go').hidden = true;
+  } else {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+}
+
+$('#install-go').onclick = async () => {
+  if (!installEvent) return;
+  installEvent.prompt();
+  const r = await installEvent.userChoice.catch(() => null);
+  installEvent = null;
+  if (r?.outcome === 'accepted') { localStorage.setItem(INSTALL_KEY, '1'); $('#install-card').hidden = true; }
+};
+
+$('#install-dismiss').onclick = () => {
+  localStorage.setItem(INSTALL_KEY, '1');
+  $('#install-card').hidden = true;
+};
+
+// 從桌面圖示的「快速動作」進來時直接開對應功能
+function handleShortcut() {
+  const go = new URLSearchParams(location.search).get('go');
+  if (!go) return;
+  history.replaceState({}, '', location.pathname);
+  if (['pain', 'call', 'needs'].includes(go)) openIntake(go);
+}
+
 // ── 啟動 ────────────────────────────────────────────────────
 $('#btn-welcome').onclick = () => { localStorage.setItem('aicoach.seen', '1'); show('home'); };
 // 離開頁面時只釋放麥克風與語音，**不要**結束演練——
@@ -880,4 +943,4 @@ onModelEvent(e => {
   else if (e.type === 'fallback') toast(`目前改用 ${e.to}`, 3000);
 });
 
-initLogin().then(updateAccount);
+initLogin().then(() => { updateAccount(); showInstallCard(); handleShortcut(); });

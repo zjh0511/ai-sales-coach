@@ -1,13 +1,26 @@
 {
   "name": "AI業務教練｜豪老師 Hao+",
   "short_name": "AI業務教練",
+  "description": "以語音角色扮演為核心的 AI 業務訓練工具，練完給五項能力評分與教練回饋。",
+  "id": "/ai-sales-coach/",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
   "lang": "zh-Hant-TW",
+  "dir": "ltr",
+  "categories": ["education", "business", "productivity"],
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "電話邀約語音對練", "short_name": "電話邀約", "url": "./?go=call" },
+    { "name": "發掘需求角色扮演", "short_name": "發掘需求", "url": "./?go=needs" },
+    { "name": "客戶潛在痛點分析", "short_name": "痛點分析", "url": "./?go=pain" }
   ]
 }

@@ -129,6 +129,9 @@ label.inline input{width:auto}
 .or-sep::before,.or-sep::after{content:"";flex:1;height:1px;background:var(--line)}
 #m-filter{margin-bottom:10px}
 a{color:var(--acc)}
+.btn.guide-link{display:block;text-align:center;text-decoration:none;margin-top:10px;
+  border-color:var(--acc);color:var(--acc)}
+#install-card h4{margin-bottom:4px}
 
 #toast{position:fixed;left:50%;bottom:calc(120px + var(--sb));transform:translateX(-50%);background:#000c;
   border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:14px;opacity:0;

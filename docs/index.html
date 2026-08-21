@@ -7,6 +7,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1117">
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="AI業務教練">
+<meta name="description" content="以語音角色扮演為核心的 AI 業務訓練工具，練完給五項能力評分與教練回饋。">
 <title>AI業務教練｜豪老師 Hao+</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -33,6 +38,7 @@
            autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在此貼上金鑰">
     <label class="inline"><input type="checkbox" id="lg-show"> 顯示金鑰</label>
     <p class="note">還沒有金鑰？<a id="lg-link" href="#" target="_blank" rel="noopener">前往申請</a>（多數服務商有免費額度）</p>
+    <a class="btn guide-link" id="lg-guide" href="guide.html">📖 Google AI Studio，免費 API 申請教學</a>
 
     <div class="card sm">
       <p class="note" style="margin:0">
@@ -92,6 +98,13 @@
       </span>
     </button>
     <button class="link" id="home-logout">登出／更換金鑰</button>
+
+    <div class="card sm" id="install-card" hidden>
+      <h4>把它放到手機桌面</h4>
+      <p class="note" id="install-how"></p>
+      <button class="btn primary" id="install-go" hidden>加到主畫面</button>
+      <button class="link" id="install-dismiss">先不要，別再提醒</button>
+    </div>
   </div>
 </section>
 
