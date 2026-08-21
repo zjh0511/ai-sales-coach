@@ -882,7 +882,10 @@ function renderHistory() {
 // ── 帳號與雲端同步 ──────────────────────────────────────────
 // 沒填 firebase-config.js 時整段自動關閉，App 行為與加入帳號功能之前完全相同。
 // 同步只涵蓋「訓練紀錄」與「偏好設定」；API 金鑰與上傳的文件永遠留在本機。
-const SKIP_KEY = 'aicoach.noacct';
+// 舊版曾有「先不要登入，直接使用」的出口，按過的人瀏覽器裡會留下這個旗標。
+// 現在改成強制登入，所以要主動清掉——只把按鈕拿掉的話，
+// 已經按過的人會繼續繞過登入頁。
+const LEGACY_SKIP = 'aicoach.noacct';
 let syncBadge = null, syncing = false, syncTimer;
 
 function bundle() {
@@ -963,6 +966,9 @@ async function afterAuth() {
 }
 
 function initAuth() {
+  authMsg('', '');
+  $('#au-pw').value = '';
+  $('#au-google').innerHTML = '';        // 可重複呼叫：登出再登入不該疊出兩顆按鈕
   $('#au-apple').hidden = !acct.appleReady();
   if (acct.googleReady()) {
     acct.googleButton($('#au-google'), (e, u) => e ? authMsg('err', e.message) : afterAuth())
@@ -1000,20 +1006,12 @@ $('#au-apple').onclick = async () => {
   catch (e) { authMsg('err', e.message); }
 };
 
-// 刻意留一條「不登入也能用」的路。登入守不住純前端的任何東西，
-// 把它做成強制關卡只會在自己壞掉的時候把所有人鎖在外面。
-$('#au-skip').onclick = async () => {
-  localStorage.setItem(SKIP_KEY, '1');
-  await initLogin();
-  updateAccount(); showInstallCard(); handleShortcut();
-};
-
 $('#home-signout').onclick = () => {
-  if (!confirm('登出帳號後就不再同步，本機的訓練紀錄會保留。確定登出？')) return;
+  if (!confirm('登出後要重新登入才能使用，本機的訓練紀錄會保留。確定登出？')) return;
   acct.signOut();
-  localStorage.setItem(SKIP_KEY, '1');   // 免得下次開啟又被擋在登入頁
   updateWho();
-  toast('已登出帳號，紀錄仍保留在這台裝置');
+  initAuth();
+  show('auth');
 };
 
 // ── PWA：註冊 Service Worker 與「加到主畫面」──────────────────
@@ -1097,7 +1095,11 @@ onModelEvent(e => {
 });
 
 async function boot() {
-  if (acct.configured() && !acct.user() && !localStorage.getItem(SKIP_KEY)) {
+  localStorage.removeItem(LEGACY_SKIP);
+  // 強制登入：每個使用者都必須有帳號。
+  // 判斷依據是本機存的登入狀態，不是連線檢查——沒網路時仍然進得去，
+  // 否則一斷線就等於整個 App 被鎖住。
+  if (acct.configured() && !acct.user()) {
     initAuth();
     return show('auth');
   }
