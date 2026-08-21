@@ -9,7 +9,7 @@
 export const FB = {
   apiKey: 'AIzaSyD_fz-QQGk-6mpMidni3jtBYQlkv9q2Sac',          // Firebase 專案設定 → 網頁應用程式 → apiKey
   dbUrl: 'https://ai-sales-coach-4b4cb-default-rtdb.asia-southeast1.firebasedatabase.app',           // Realtime Database 的網址，例：https://xxx-default-rtdb.asia-southeast1.firebasedatabase.app
-  googleClientId: '',  // Google Cloud → 憑證 → OAuth 2.0 用戶端 ID（網頁應用程式），例：123-abc.apps.googleusercontent.com
+  googleClientId: '790589168231-ajsqtuoe7c7m3g185ilhokcqa447hd7v.apps.googleusercontent.com',  // Google Cloud → 憑證 → OAuth 2.0 用戶端 ID（網頁應用程式），例：123-abc.apps.googleusercontent.com
 
   // 以下兩項只有要開 Apple 登入才需要。
   // Apple 登入需要「付費的 Apple Developer 帳號」（約 NT$3,300／年）才能申請憑證，
