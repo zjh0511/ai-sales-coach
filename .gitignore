@@ -29,3 +29,8 @@ node_modules/
 Thumbs.db
 .DS_Store
 desktop.ini
+
+# 報表含同事的演練評分與教練回饋，是個人表現資料，絕不進公開 repo
+報表/
+*_成員總表.csv
+*_演練明細.csv

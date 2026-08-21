@@ -152,6 +152,7 @@ node tools/serve.mjs        # 啟動本機靜態伺服器
 ```bash
 node tools/selftest.mjs        # 跑完六大功能共 60 項檢查
 node tools/selftest.mjs 5      # 只跑第 5 節
+node tools/fbcheck.mjs         # 帳號同步與安全規則（改過規則就要跑）
 ```
 
 需要一把 Gemini 金鑰，放在專案根目錄的 `Gemini API Key.txt`，
@@ -195,6 +196,8 @@ tools/
   serve.mjs            本機開發用靜態伺服器
   gencert.mjs          自簽憑證產生器
   selftest.mjs         端到端自我測試
+  fbcheck.mjs          帳號同步與安全規則的端到端檢查
+  report.mjs           成員與演練紀錄報表（CSV，給專案擁有者）
 ```
 
 **零外部相依**，只用瀏覽器與 Node 內建 API，沒有 `node_modules`。
@@ -272,6 +275,35 @@ tools/
 | 建立客戶 | 8.9 秒 |
 | PPTX 解析（13 頁） | 0.017 秒 |
 | 理賠查詢 | 3～6 秒 |
+
+---
+
+## 管理者報表（只有專案擁有者跑得動）
+
+想知道有誰註冊、練了幾次、進步狀況：
+
+```bash
+node tools/report.mjs
+```
+
+產生兩個 CSV（含 UTF-8 BOM，Excel 與 Google Sheets 都能直接開）：
+
+| 檔案 | 內容 |
+|---|---|
+| `AI業務教練_成員總表.csv` | 每人一列：姓名、E-mail、登入方式、註冊時間、最後登入、演練次數、最後演練、平均星等、五項能力各自平均、最常練的模式 |
+| `AI業務教練_演練明細.csv` | 每次演練一列：時間、模式、客戶、五項分數、教練總結、下次挑戰 |
+
+裝了 **Google 雲端硬碟桌面版**之後會自動寫進雲端硬碟資料夾，檔案跟著同步；
+也可以自己指定：`node tools/report.mjs --out "G:/我的雲端硬碟/AI業務教練"`。
+只要總表不要明細：加 `--no-detail`。
+
+資料來源是 `firebase auth:export`（誰註冊）與 `firebase database:get /users`
+（演練紀錄），靠 uid 對起來。安全規則對所有人都是拒絕，**只有專案擁有者的
+憑證有管理權限**，所以這支腳本只有你（`firebase login` 過的那台電腦）跑得動。
+
+> ⚠️ 報表包含同事的演練評分與教練回饋，是**個人表現資料**。
+> 已加入 `.gitignore` 不會進 repo；產出之後放在哪裡、給誰看，請比照人事資料處理。
+> 使用者也應事先知道你看得到這些紀錄。
 
 ---
 
