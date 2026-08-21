@@ -695,3 +695,95 @@ E-mail 註冊內建、免費額度對一個團隊綽綽有餘，而且這個專�
    `provider` 不相符就不套用。下次開啟就正確了。這個洞不值得為它增加複雜度。
 5. **README 的「不收集任何資料」已改寫。** 一旦開啟同步，訓練紀錄就會經過
    Google 的伺服器，資料庫擁有者在後台看得到——這一點必須事先告知同事。
+
+---
+
+## 2026-08-21｜D026 network-first 沒有繞過瀏覽器的 HTTP 快取（D023 的漏洞）
+
+**症狀**
+
+`firebase-config.js` 加上 `googleClientId` 之後 push、Pages 部署完成、
+用 `curl` 抓正式站確認是新內容——但頁面上的 Google 登入按鈕就是不出現。
+在頁面裡 `fetch('firebase-config.js', {cache:'no-store'})` 抓到的是新的，
+而 `import('./firebase-config.js')` 拿到的模組卻還是舊的空值。
+
+**原因**
+
+GitHub Pages 送 `Cache-Control: max-age=600`。SW 的 `fetch(req)`
+**會經過瀏覽器的 HTTP 快取**。所以 D023 的 network-first 只繞過了
+「SW 自己的 Cache Storage」，沒繞過 HTTP 快取——使用者最久可能吃到
+十分鐘前的舊模組。
+
+**「network-first」這個名字讓我以為問題已經解決了。**
+D023 寫下「改版後一定拿到最新」的時候，我沒有去確認這條路上還有第二層快取。
+
+**修法**
+
+```js
+const fresh = await fetch(req.url, { cache: 'no-cache' });
+```
+
+`no-cache` 發出帶 `If-None-Match` 的條件請求：檔案沒改就回 304（幾十位元組），
+改了就一定拿到新的。代價是每個外殼檔案多一次條件往返，用這個換
+「絕不吃到舊版」——與 D023 原本的取捨方向一致，只是這次真的做到了。
+
+不用 `no-store`：那會完全跳過快取，連 304 的便宜都拿不到。
+
+**啟示（這是這次最值得記的一條）**
+
+**快取是分層的，只解決你看得到的那一層等於沒解決。**
+瀏覽器的資源請求至少要穿過：Service Worker Cache Storage → HTTP 快取 →
+CDN → 來源伺服器。我當時只想到第一層。
+
+而且這個 bug 的表現形式極具欺騙性：**「重新部署」與「重新整理」都無效，
+但用 `fetch` 手動抓又是新的**——因為 `fetch` 的預設快取模式與
+ES 模組載入器的行為不同。下次遇到「明明部署了卻沒生效」，
+先問「這條路上有幾層快取」，不要只看最外面那一層。
+
+## 2026-08-21｜D027 Firebase 設定由 CLI 完成；剩下的一步誠實交回使用者
+
+使用者設定 Firebase「弄一半不會弄了」，要求我直接幫他完成。
+
+**先劃清界線**
+
+我不代輸入 Google 帳號密碼，也不代接受 Google Cloud 的服務條款。
+可行的做法是：裝 `firebase-tools`，**由使用者自己執行 `firebase login`**
+（瀏覽器開在他自己的 Google 登入頁，我全程看不到密碼），
+之後 CLI 的授權就能讓我用指令完成其餘工作。
+
+**探測比詢問可靠**
+
+使用者不確定自己做到哪裡。與其問，不如用公開端點直接量：
+
+| 想知道 | 探測方式 | 結果 |
+|---|---|---|
+| 有哪些專案／應用／資料庫 | `firebase projects:list` 等 | 三者都已建立，資料庫在 asia-southeast1 |
+| 安全規則是否外洩 | 未授權 `curl` 讀寫資料庫 | 讀寫皆 401（鎖定模式，安全但不可用） |
+| E-mail 登入是否啟用 | `accounts:sendOobCode` 打 `.invalid` 網域 | 200 → 已啟用 |
+| Google 是否啟用、用戶端 ID | `accounts:createAuthUri` → 從 `authUri` 撈 `client_id` | 已啟用，ID 撈到了 |
+| 網站來源是否被授權 | `accounts.google.com/gsi/status` | **403 → 未授權** |
+
+`signInWithPassword` 探測 E-mail 登入是**無效**的：新專案預設開啟
+email enumeration protection，錯誤一律被統一成 `INVALID_LOGIN_CREDENTIALS`，
+把 `OPERATION_NOT_ALLOWED` 遮掉了。改用 `sendOobCode` 才問得出答案。
+
+`/gsi/status` 這個探測是關鍵：**GIS 按鈕在來源未授權時仍然「畫得出來」，
+只有按下去才失敗。**如果只看畫面就宣告完成，會交出一顆壞按鈕。
+
+**做不到的部分不假裝**
+
+修改 OAuth 用戶端的「已授權 JavaScript 來源」沒有公開 API，
+只能在網頁上點。於是：
+
+- **不先填 `googleClientId`**。填了會出現一顆按下去就壞的按鈕，比沒有按鈕更糟。
+- 給使用者該憑證編輯頁的**直達連結**、要填的**那一行**、以及一段可貼進
+  主控台自行確認生效的指令（403 未生效／200 已生效）。
+- 使用者回報加好後，先量到 `/gsi/status` 回 200，**才**填入 ID 並部署。
+
+**留下可重複執行的驗證**
+
+`tools/fbcheck.mjs`：註冊 → 寫入 → 讀回 → 跨裝置合併 → **四種越權嘗試**
+→ 刪除測試帳號，共 14 項。
+
+安全規則改壞了不會有任何錯誤訊息，只會變成「所有同事互相看得到訓練紀錄」。
+**這種 bug 只有主動去撞才發現得到**，所以它必須是一支腳本，不是一次性的檢查。

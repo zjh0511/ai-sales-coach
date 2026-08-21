@@ -36,17 +36,17 @@
 - **上傳的文件存在你自己的瀏覽器**（IndexedDB），永久保留，不會因為服務重啟而消失
 - **訓練紀錄預設也存在本機**
 
-### 選配：帳號同步
+### 帳號同步（已啟用）
 
-如果專案擁有者設定了 Firebase（見 [account-setup.html](docs/account-setup.html)），
-會多出一個註冊／登入畫面，可以用 **Google 帳號**或 **E-mail** 登入，
-**訓練紀錄與偏好設定**就會跟著人跑，換手機、換電腦都接得起來。
+打開網站會先看到註冊／登入畫面，可以用 **Google 帳號**或 **E-mail** 登入，
+**訓練紀錄與偏好設定**會跟著人跑，換手機、換電腦都接得起來。
 
 - **API 金鑰、上傳的教材與保單條款永遠不上雲端**，這是程式碼層面的限制，不是設定選項
 - 開啟同步後，訓練紀錄會經過 Google 的伺服器；資料庫擁有者在後台看得到，**這一點應事先告知使用者**
 - 登入畫面永遠有「先不要登入，直接使用」的出口，不登入功能完全不受影響
 - Apple 登入需要付費的 Apple Developer 帳號（Apple 的規定），程式碼已備好但預設關閉
-- 沒有設定 Firebase 時，登入畫面不會出現，App 行為與加入這個功能之前完全相同
+- 設定值放在 [docs/firebase-config.js](docs/firebase-config.js)，清空 `apiKey` 就能整段關閉帳號功能
+- 安全規則見 [database.rules.json](database.rules.json)，改動後請跑 `node tools/fbcheck.mjs` 驗證
 
 ---
 
