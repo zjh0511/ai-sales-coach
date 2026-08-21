@@ -46,6 +46,24 @@
   </p>
 </div>
 
+<div class="card" style="border-color:#1f5c3a;background:#0f2318">
+  <h3 style="margin:0 0 8px;font-size:17px">📌 這個專案目前的狀態（2026-08-21）</h3>
+  <p style="margin:0"><b>專案：</b><code>ai-sales-coach-4b4cb</code>　·　
+  <b>資料庫：</b>asia-southeast1（新加坡）</p>
+  <ul style="margin:8px 0 0">
+    <li>✅ 步驟 1～3：專案、網頁應用程式、Realtime Database 都已建立</li>
+    <li>✅ 步驟 4：<b>安全規則已部署並實測</b>——帶著合法 token 也讀不到別人的資料</li>
+    <li>✅ 步驟 5：E-mail／密碼登入、Google 登入都已在後台啟用</li>
+    <li>✅ 步驟 7：<code>apiKey</code> 與資料庫網址已填入 <code>firebase-config.js</code></li>
+    <li>⚠️ <b>只剩一件事：</b>把 <code>https://zjh0511.github.io</code> 加進 OAuth 用戶端的
+      「已授權的 JavaScript 來源」，Google 一鍵登入才會動（見下方步驟 6）。
+      <b>E-mail 註冊與登入現在就可以用，不受這件事影響。</b></li>
+  </ul>
+  <p class="note" style="margin:8px 0 0">
+    驗證指令：<code>node tools/fbcheck.mjs</code>（14 項檢查，含四種越權嘗試）
+  </p>
+</div>
+
 <h2 style="font-size:19px;margin:24px 0 0">先講清楚會付出什麼</h2>
 <div class="card">
   <p><b>費用：</b>Firebase 的免費方案（Spark）對一個業務團隊來說綽綽有餘——
@@ -113,23 +131,28 @@
     <li><b>電子郵件／密碼</b> — 直接啟用就好</li>
     <li><b>Google</b> — 啟用，並填一個「專案的公開名稱」（使用者授權時會看到）</li>
   </ul>
-  <p>再到 <b>設定 → 已授權網域</b>，確認清單裡有 <code>zjh0511.github.io</code>。
-  沒有就手動加上去。</p>
+  <div class="do">啟用 Google 時 Firebase 會自動幫你建一組 OAuth 用戶端，
+  不必自己去 Cloud Console 建——但那組憑證預設不允許 GitHub Pages 的網址，
+  所以還有步驟 6。</div>
   <div class="warn"><b>Apple 先跳過。</b>Apple 登入需要付費的 Apple Developer 帳號
   （約 NT$3,300／年）才能申請憑證，這是 Apple 的規定。買了之後再回來啟用。</div>
 </div>
 
 <div class="step">
-  <span class="n">6</span><h3>取得 Google 登入用的用戶端 ID</h3>
-  <p>啟用 Google 登入時，Firebase 會自動幫你建一組 OAuth 用戶端。到
-  <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud 憑證頁</a>，
-  在上方確認選的是同一個專案，找到 <b>OAuth 2.0 用戶端 ID</b> 底下那筆
-  「Web client (auto created by Google Service)」，點進去：</p>
-  <ul>
-    <li><b>已授權的 JavaScript 來源</b>加入 <code>https://zjh0511.github.io</code></li>
-    <li>複製上方的<b>用戶端 ID</b>，長得像 <code>1234-abcd.apps.googleusercontent.com</code></li>
-  </ul>
-  <div class="do">要在本機測試的話，把 <code>http://localhost:8444</code> 也加進「已授權的 JavaScript 來源」。</div>
+  <span class="n">6</span><h3>把網站網址加進 OAuth 用戶端的授權來源</h3>
+  <p>啟用 Google 登入時，Firebase 已自動幫你建好一組 OAuth 用戶端。
+  但它預設只允許 <code>firebaseapp.com</code>，所以要手動把 GitHub Pages 的網址加進去。
+  <b>建立 OAuth 用戶端與修改授權來源都沒有公開 API，這一步只能在網頁上點。</b></p>
+  <a class="big" href="https://console.cloud.google.com/apis/credentials/oauthclient/790589168231-ajsqtuoe7c7m3g185ilhokcqa447hd7v.apps.googleusercontent.com?project=ai-sales-coach-4b4cb" target="_blank" rel="noopener">直接開啟這組憑證的編輯頁 →</a>
+  <p>在「<b>已授權的 JavaScript 來源</b>」按「<b>+ 新增 URI</b>」，填入：</p>
+<pre>https://zjh0511.github.io</pre>
+  <p>要在本機測試就再加一行 <code>http://localhost:8444</code>。按<b>儲存</b>。</p>
+  <div class="warn"><b>只填到網域就好</b>，不要加 <code>/ai-sales-coach/</code> 這種路徑——
+  JavaScript 來源只接受「協定＋網域＋通訊埠」，多填路徑會被拒絕。</div>
+  <div class="do">存檔後 Google 那邊可能要幾分鐘才生效。生效與否可以這樣確認：
+  在網站的開發者工具主控台貼上
+  <code>fetch('https://accounts.google.com/gsi/status?client_id=790589168231-ajsqtuoe7c7m3g185ilhokcqa447hd7v.apps.googleusercontent.com&amp;as=x&amp;origin='+encodeURIComponent(location.origin)).then(r=&gt;console.log(r.status))</code>
+  ——回 <b>403 就是還沒生效</b>，<b>200 就是好了</b>。</div>
 </div>
 
 <div class="step">
