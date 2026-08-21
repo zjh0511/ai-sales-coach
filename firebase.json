@@ -1,0 +1,6 @@
+{
+  "//": "只用來部署 Realtime Database 的安全規則。網站本身放在 GitHub Pages，不用 Firebase Hosting。",
+  "database": {
+    "rules": "database.rules.json"
+  }
+}

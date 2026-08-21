@@ -7,8 +7,8 @@
 // 還沒填的時候，整個帳號功能會自動關閉，App 的行為與加入帳號功能之前完全相同。
 // 設定步驟見 account-setup.html。
 export const FB = {
-  apiKey: '',          // Firebase 專案設定 → 網頁應用程式 → apiKey
-  dbUrl: '',           // Realtime Database 的網址，例：https://xxx-default-rtdb.asia-southeast1.firebasedatabase.app
+  apiKey: 'AIzaSyD_fz-QQGk-6mpMidni3jtBYQlkv9q2Sac',          // Firebase 專案設定 → 網頁應用程式 → apiKey
+  dbUrl: 'https://ai-sales-coach-4b4cb-default-rtdb.asia-southeast1.firebasedatabase.app',           // Realtime Database 的網址，例：https://xxx-default-rtdb.asia-southeast1.firebasedatabase.app
   googleClientId: '',  // Google Cloud → 憑證 → OAuth 2.0 用戶端 ID（網頁應用程式），例：123-abc.apps.googleusercontent.com
 
   // 以下兩項只有要開 Apple 登入才需要。

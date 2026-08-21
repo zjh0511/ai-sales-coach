@@ -1,0 +1,12 @@
+{
+  // 每個使用者只讀寫得到自己那一份資料。
+  // 不要改成 ".read": "auth != null"——那等於全公司的訓練紀錄互相看得到。
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      }
+    }
+  }
+}
