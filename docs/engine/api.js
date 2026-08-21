@@ -76,6 +76,19 @@ export async function api(path, body = {}) {
         });
       }
       case '/session/begin': return CE.beginRoleplay(session(body));
+
+      // 分頁被回收／不小心重新整理之後，把中斷的演練接回去
+      case '/session/pending': return { pending: CE.pendingSession() };
+      case '/session/resume': {
+        const s = session(body);
+        return {
+          opening: null,
+          transcript: s.history.filter(h => h.speaker !== 'system').map(h => ({ speaker: h.speaker, text: h.text })),
+          trust: s.trust,
+          revealed: s.revealed.size,
+          totalHidden: (s.persona.hidden_needs || []).length,
+        };
+      }
       case '/session/turn': return await CE.handleTurn(need(), session(body), body.text);
       case '/session/end': {
         const s = session(body);

@@ -19,10 +19,64 @@ setInterval(() => {
 
 const newId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
+// ── Session 續命 ────────────────────────────────────────────────
+// 原本 session 只存在記憶體 Map 裡。手機切到別的 App、Safari 為了省記憶體
+// 回收分頁、或使用者不小心重新整理，練到一半的演練就整個消失，
+// 只會看到「這次練習的連線已經逾時，請重新開始」。
+// 對訓練工具來說，這種挫折足以讓人不想再練——所以改成同步寫進 sessionStorage。
+// 用 sessionStorage 而非 localStorage：關掉分頁就該結束，不必留到下次。
+const STORE_KEY = 'aicoach.session';
+const store = typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+
+// revealed 是 Set，JSON 無法直接表示
+const pack = s => JSON.stringify({ ...s, revealed: [...s.revealed] });
+const unpack = j => ({ ...j, revealed: new Set(j.revealed || []) });
+
+function persist(s) {
+  if (!store) return;
+  try { store.setItem(STORE_KEY, pack(s)); } catch { /* 容量滿或隱私模式，忽略 */ }
+}
+
+function forget(id) {
+  if (!store) return;
+  try {
+    const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
+    if (!j || j.id === id) store.removeItem(STORE_KEY);
+  } catch { store.removeItem(STORE_KEY); }
+}
+
 export function getSession(id) {
-  const s = sessions.get(id);
+  let s = sessions.get(id);
+  if (!s && store) {                       // 分頁被回收後重新載入 → 從儲存體救回來
+    try {
+      const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
+      if (j && j.id === id && Date.now() - j.touched < SESSION_TTL) {
+        s = unpack(j);
+        sessions.set(id, s);
+      }
+    } catch { /* 壞掉就當作沒有 */ }
+  }
   if (s) s.touched = Date.now();
   return s;
+}
+
+// 給 UI 用：有沒有中斷的演練可以接回去？
+export function pendingSession() {
+  if (!store) return null;
+  try {
+    const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
+    if (!j || Date.now() - j.touched > SESSION_TTL) return null;
+    if (j.state !== 'ROLEPLAY') return null;          // 只有演練中被打斷才值得接回
+    const turns = (j.history || []).filter(h => h.speaker === 'user').length;
+    if (!turns) return null;                          // 一句都還沒說，重新開始更乾淨
+    return {
+      sessionId: j.id, mode: j.mode, turns,
+      name: j.persona?.name, summary: j.persona?.public_summary,
+      voice: j.persona?.voice_hint || { rate: 1, pitch: 1 },
+      difficultyLabel: P.difficultyOf(j.difficulty).label,
+      transcript: (j.history || []).map(h => ({ speaker: h.speaker, text: h.text })),
+    };
+  } catch { return null; }
 }
 
 // ── 建立 Session：Persona + Scenario + Demo ─────────────────────
@@ -72,6 +126,7 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
     history: [], violations: [], revealed: new Set(),
     guidance: 0, stuck: 0, startedAt: null, touched: Date.now(), lastUser: '', latency: [],
   });
+  persist(sessions.get(id));
 
   return {
     sessionId: id, mode, context, contextLabel: P.CONTEXTS[context].label,
@@ -92,6 +147,7 @@ export function beginRoleplay(s) {
     s.state = 'ROLEPLAY';
     s.startedAt = Date.now();
     s.history.push({ speaker: 'customer', text: s.persona.opening_line, at: Date.now() });
+    persist(s);
   }
   return { opening: s.persona.opening_line };
 }
@@ -116,6 +172,7 @@ export async function handleTurn(gw, s, userText) {
   if (c.level === 'high') {
     const msg = interventionMessage(c.hits);
     s.history.push({ speaker: 'system', text: msg, at: Date.now() });
+    persist(s);
     return { type: 'compliance', text: msg, ended: false, trust: s.trust };
   }
 
@@ -165,6 +222,7 @@ export async function handleTurn(gw, s, userText) {
   const ended = s.canEnd
     && (s.guidance >= s.maxGuidance || (data.end === true && userTurns >= MIN_TURNS));
   if (ended) s.state = 'COMPLETED';
+  if (ended) forget(s.id); else persist(s);
 
   return {
     type: 'customer', text: say, ended, trust: s.trust,
@@ -234,5 +292,5 @@ export async function evaluate(gw, s) {
   };
 }
 
-export function dropSession(id) { sessions.delete(id); }
+export function dropSession(id) { sessions.delete(id); forget(id); }
 export const sessionCount = () => sessions.size;

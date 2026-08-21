@@ -1,4 +1,4 @@
-import { Voice, supported } from './voice.js';
+import { Voice, supported, voiceInfo } from './voice.js';
 import { api, providers, restore, onModelEvent } from './engine/api.js';
 import { startOpenRouter, finishOpenRouter, oauthSupported } from './engine/oauth.js';
 
@@ -23,7 +23,7 @@ function show(name) {
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
-  if (name === 'home') updateAccount();      // 回首頁時同步目前使用的模型
+  if (name === 'home') { updateAccount(); checkResume(); }   // 回首頁時同步模型與中斷的演練
 }
 
 document.addEventListener('click', e => {
@@ -169,6 +169,49 @@ async function updateAccount() {
 
 $('#home-logout').onclick = () => {
   if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout();
+};
+
+// ── 接回中斷的演練 ──────────────────────────────────────────
+// 手機切到別的 App、Safari 回收分頁、或不小心重新整理，
+// 都會讓練到一半的演練消失。能接回去比「請重新開始」友善得多。
+async function checkResume() {
+  const btn = $('#home-resume');
+  btn.hidden = true;
+  if (S.sessionId) return;                      // 手上已經有進行中的演練
+  try {
+    const { pending } = await api('/session/pending');
+    if (!pending) return;
+    S.pending = pending;
+    $('#resume-info').textContent =
+      `${pending.name}　·　${pending.difficultyLabel}　·　已進行 ${pending.turns} 個回合`;
+    btn.hidden = false;
+  } catch { /* 沒有就算了，不用打擾使用者 */ }
+}
+
+$('#home-resume').onclick = async () => {
+  const p = S.pending;
+  if (!p) return;
+  voice.unlock();                               // 必須在使用者手勢中
+  voice.resetStats();
+  S.fn = p.mode;
+  S.sessionId = p.sessionId;
+  S.persona = { name: p.name, summary: p.summary, voice: p.voice };
+  S.ended = false;
+  try {
+    const d = await api('/session/resume', { sessionId: p.sessionId });
+    $('#p-log').innerHTML = '';
+    $('#p-name').textContent = p.name;
+    $('#p-found').hidden = S.fn !== 'needs';
+    if (S.fn === 'needs') $('#p-found').textContent = `已挖到 ${d.revealed}／${d.totalHidden} 項`;
+    for (const t of d.transcript) push('#p-log', t.speaker, t.text);
+    show('play');
+    setStatus('接回上次的進度，繼續說吧');
+    nextTurn();
+  } catch (e) {
+    S.sessionId = null;
+    toast(e.message);
+    checkResume();
+  }
 };
 
 // ── 模型設定 ────────────────────────────────────────────────
@@ -496,6 +539,17 @@ const voice = new Voice({
 
 const setStatus = (t, cls = '') => { const n = $('#p-status'); n.textContent = t; n.className = 'status ' + cls; };
 
+// iOS 預設給網頁用的中文語音是壓縮版，聽起來明顯是機器聲。
+// 下載加強版之後音質差距很大，而這件事使用者不會自己知道——所以提示一次。
+const VOICE_HINT_KEY = 'aicoach.voicehint';
+function hintVoiceQuality() {
+  if (localStorage.getItem(VOICE_HINT_KEY)) return;
+  const v = voiceInfo();
+  if (!v || v.enhanced) return;                 // 已經是加強版就不用囉唆
+  localStorage.setItem(VOICE_HINT_KEY, '1');
+  toast('想讓客戶的聲音更像真人？iPhone：設定 → 輔助使用 → 旁白 → 語音 → 中文 → 下載「加強版」', 9000);
+}
+
 function push(log, speaker, text) {
   const n = $(log);
   n.appendChild(el('div', 'msg ' + speaker, text));
@@ -505,11 +559,13 @@ function push(log, speaker, text) {
 // ── 開始演練 ────────────────────────────────────────────────
 $('#btn-start').onclick = async () => {
   voice.unlock();                                    // 必須在使用者手勢中
+  voice.resetStats();
   $('#p-log').innerHTML = ''; $('#p-name').textContent = S.persona.name;
   $('#p-found').hidden = S.fn !== 'needs';
   if (S.fn === 'needs') $('#p-found').textContent = '已挖到 0 項';
   S.ended = false; show('play');
   if (!supported.stt) toast('這個瀏覽器不支援語音辨識，請用下方文字輸入', 4000);
+  else hintVoiceQuality();
   try {
     const d = await api('/session/begin', { sessionId: S.sessionId });
     push('#p-log', 'customer', d.opening);
@@ -576,6 +632,7 @@ async function finish() {
   const id = S.sessionId; S.sessionId = null;
   try {
     const fb = await api('/session/end', { sessionId: id });
+    fb.voiceStats = voice.stats();          // 使用者感知的延遲，只有前端量得到
     renderFeedback(fb); saveHistory(fb); show('fb');
   } catch (e) { if (e.auth) return; toast(e.message); show('home'); }
 }
@@ -655,7 +712,11 @@ function renderFeedback(fb) {
   }
 
   const m = fb.metrics || {};
-  b.append(el('p', 'note', `回合數 ${m.turns}｜對談 ${m.durationSec} 秒｜客戶最終信任度 ${m.finalTrust}/100｜AI 平均回應 ${fb.avgLatencyMs} ms`));
+  const vs = fb.voiceStats;
+  b.append(el('p', 'note',
+    `回合數 ${m.turns}｜對談 ${m.durationSec} 秒｜客戶最終信任度 ${m.finalTrust}/100`
+    + `｜AI 生成 ${fb.avgLatencyMs} ms`
+    + (vs ? `｜你說完到客戶開口 平均 ${vs.avg} ms（最快 ${vs.best}／最慢 ${vs.worst}）` : '')));
   b.scrollTop = 0;
 }
 
@@ -803,7 +864,9 @@ function renderHistory() {
 
 // ── 啟動 ────────────────────────────────────────────────────
 $('#btn-welcome').onclick = () => { localStorage.setItem('aicoach.seen', '1'); show('home'); };
-window.addEventListener('pagehide', abort);
+// 離開頁面時只釋放麥克風與語音，**不要**結束演練——
+// 手機切換 App 也會觸發 pagehide，若在這裡 abort 就等於自己把續命功能抵銷掉。
+window.addEventListener('pagehide', () => voice.reset());
 $('#home-acct').hidden = true; $('#home-logout').hidden = true;
 
 // 額度用盡自動降階時，讓使用者知道發生了什麼，而不是默默變慢或變差
