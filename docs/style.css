@@ -140,6 +140,33 @@ a{color:var(--acc)}
 .sync.off{background:#3a1f12;color:#fb923c}
 .sync.busy{background:#1e2a3a;color:#93c5fd}
 
+
+/* 加到主畫面：按鈕與教學浮層 */
+.btn.install{display:flex;gap:14px;align-items:center;text-align:left;margin-top:18px;
+  border-color:var(--acc);background:#0f1a2e}
+.btn.install b{display:block;font-size:15px;color:var(--acc)}
+.btn.install small{color:var(--muted);font-size:12px;font-weight:400}
+.btn.install .t-ico{font-size:24px;flex:none}
+
+.sheet{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;justify-content:center}
+.sheet[hidden]{display:none}
+.sheet-bg{position:absolute;inset:0;background:#000b}
+.sheet-box{position:relative;width:100%;max-width:520px;max-height:88vh;overflow-y:auto;
+  background:var(--card);border:1px solid var(--line);border-radius:18px 18px 0 0;
+  padding:20px 20px calc(20px + var(--sb));animation:up .22s ease-out}
+@keyframes up{from{transform:translateY(18px);opacity:.6}}
+.sheet-box h3{font-size:19px;margin:0 0 6px}
+.sh-step{display:flex;gap:12px;align-items:flex-start;margin:14px 0}
+.sh-n{flex:none;width:26px;height:26px;border-radius:50%;background:var(--acc);color:#fff;
+  font:700 13px/26px inherit;text-align:center}
+.sh-step p{margin:2px 0 0;font-size:15px}
+.sh-step small{display:block;color:var(--muted);font-size:13px;margin-top:3px}
+.sh-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+  border:1px solid var(--line);border-radius:8px;background:#0b1220;vertical-align:middle;margin:0 4px}
+.sh-icon svg{width:19px;height:19px;fill:none;stroke:var(--acc);stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+.sheet-box .card.sm{margin:16px 0 14px}
+
 #toast{position:fixed;left:50%;bottom:calc(120px + var(--sb));transform:translateX(-50%);background:#000c;
   border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:14px;opacity:0;
   transition:opacity .25s;pointer-events:none;max-width:86%;text-align:center;z-index:9}

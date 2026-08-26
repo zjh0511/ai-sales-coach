@@ -24,7 +24,7 @@ function show(name) {
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
-  if (name === 'home') { updateAccount(); checkResume(); showInstallCard(); updateWho(); }
+  if (name === 'home') { updateAccount(); checkResume(); syncInstallBtn(); updateWho(); }
 }
 
 document.addEventListener('click', e => {
@@ -962,7 +962,7 @@ async function afterAuth() {
   updateWho();
   await syncNow(true);          // 先把雲端資料拉下來，再進金鑰流程（模型指定才會生效）
   await initLogin();
-  updateAccount(); showInstallCard(); handleShortcut();
+  updateAccount(); syncInstallBtn(); handleShortcut();
 }
 
 function initAuth() {
@@ -1021,51 +1021,107 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').catch(() => { /* 不支援就算了，功能不受影響 */ });
 }
 
-const INSTALL_KEY = 'aicoach.installhint';
 const standalone = () =>
-  window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  window.matchMedia('(display-mode: standalone)').matches
+  || window.matchMedia('(display-mode: fullscreen)').matches
+  || navigator.standalone === true;
+
+// 平台判斷。這裡的細節都是為了「按鈕按下去要有正確的下一步」：
+// iPadOS 13 之後 UA 會自稱 Mac，只能靠觸控點數分辨；
+// 而台灣同事很常從 LINE 點連結進來，那個內建瀏覽器根本沒有「加入主畫面」。
+function platform() {
+  const ua = navigator.userAgent;
+  const iPhone = /iPhone|iPod/.test(ua);
+  const iPad = /iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const inApp = /Line\/|FBAN|FBAV|Instagram|MicroMessenger/i.test(ua);   // LINE／FB／IG／微信
+  const iosOther = (iPhone || iPad) && /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  return { iPhone, iPad, ios: iPhone || iPad, inApp, iosOther };
+}
 
 let installEvent = null;
 window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();                     // 由我們自己決定何時提示
+  e.preventDefault();               // 由我們自己決定何時提示
   installEvent = e;
-  showInstallCard();
+  syncInstallBtn();
 });
+window.addEventListener('appinstalled', () => { installEvent = null; syncInstallBtn(); });
 
-function showInstallCard() {
-  const card = $('#install-card');
-  if (!card) return;
-  // 已經是獨立 App、或使用者說過別再提醒，就不出現
-  if (standalone() || localStorage.getItem(INSTALL_KEY)) { card.hidden = true; return; }
-
-  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-  if (installEvent) {
-    $('#install-how').textContent = '裝好之後從桌面圖示開啟，會像一般 App 一樣全螢幕，不會有瀏覽器網址列。';
-    $('#install-go').hidden = false;
-  } else if (ios) {
-    // iOS Safari 沒有 beforeinstallprompt，只能教使用者手動加
-    $('#install-how').textContent = 'iPhone／iPad：點瀏覽器下方（或右上）的分享鍵 → 選「加入主畫面」。之後從桌面圖示開啟就是全螢幕。';
-    $('#install-go').hidden = true;
-  } else {
-    card.hidden = true;
-    return;
-  }
-  card.hidden = false;
+// 已經是獨立 App 就不必再提示——按鈕留著只會讓人困惑
+function syncInstallBtn() {
+  const b = $('#install-btn');
+  if (b) b.hidden = standalone();
 }
 
-$('#install-go').onclick = async () => {
-  if (!installEvent) return;
-  installEvent.prompt();
-  const r = await installEvent.userChoice.catch(() => null);
-  installEvent = null;
-  if (r?.outcome === 'accepted') { localStorage.setItem(INSTALL_KEY, '1'); $('#install-card').hidden = true; }
-};
+// ── 教學浮層 ────────────────────────────────────────────────
+// 分享圖示長什麼樣是使用者最容易認錯的地方，所以直接畫出來。
+const ICON_SHARE = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
+  + '<path d="M12 15V4"/><path d="M8.5 7.5 12 4l3.5 3.5"/>'
+  + '<path d="M6 12v7a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-7"/></svg></span>';
+const ICON_MORE = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
+  + '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/>'
+  + '<circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>'
+  + '<circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg></span>';
+const ICON_PLUS = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
+  + '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8.5v7M8.5 12h7"/></svg></span>';
 
-$('#install-dismiss').onclick = () => {
-  localStorage.setItem(INSTALL_KEY, '1');
-  $('#install-card').hidden = true;
+function sheet(title, lead, steps) {
+  $('#sh-title').textContent = title;
+  $('#sh-lead').innerHTML = lead;
+  $('#sh-steps').innerHTML = steps.map((s, i) =>
+    `<div class="sh-step"><span class="sh-n">${i + 1}</span><div><p>${s[0]}</p>`
+    + (s[1] ? `<small>${s[1]}</small>` : '') + '</div></div>').join('');
+  $('#sheet').hidden = false;
+}
+document.querySelectorAll('#sheet [data-close]').forEach(e => {
+  e.onclick = () => { $('#sheet').hidden = true; };
+});
+
+$('#install-btn').onclick = async () => {
+  const p = platform();
+
+  // 1) Android／桌面 Chrome：真的可以一鍵安裝
+  if (installEvent) {
+    installEvent.prompt();
+    const r = await installEvent.userChoice.catch(() => null);
+    installEvent = null;
+    if (r?.outcome === 'accepted') { toast('已加到主畫面'); syncInstallBtn(); }
+    return;
+  }
+
+  // 2) LINE／FB／IG 的內建瀏覽器：連「加入主畫面」的選項都沒有，
+  //    先把人帶到真正的瀏覽器，否則後面教什麼都沒用
+  if (p.inApp) {
+    return sheet('請先用瀏覽器開啟',
+      '你現在是從 <b>LINE／Facebook 之類的 App 內建瀏覽器</b>開啟的，'
+      + '這種瀏覽器<b>沒有</b>「加入主畫面」的功能。先換到系統瀏覽器就可以了。',
+      [[`點右上角的${ICON_MORE}`, '有些版本在右下角，圖示是三個點或箭頭'],
+       ['選「用 Safari 開啟」或「用瀏覽器開啟」', 'Android 是「用 Chrome 開啟」'],
+       ['在瀏覽器裡再按一次這顆「加到主畫面」']]);
+  }
+
+  // 3) iPhone／iPad 但不是 Safari：Chrome、Edge 等在 iOS 上做不到
+  if (p.iosOther) {
+    return sheet('請用 Safari 開啟',
+      'iPhone／iPad 上<b>只有 Safari</b> 能把網頁加到主畫面，這是 Apple 的限制。',
+      [['複製這一頁的網址'], ['開啟 Safari，貼上網址'], ['再按一次這顆「加到主畫面」']]);
+  }
+
+  // 4) iPhone／iPad Safari：沒有任何 API 可以自動建立捷徑，只能教
+  if (p.ios) {
+    const where = p.iPad ? '螢幕<b>右上角</b>' : '螢幕<b>最下方</b>';
+    return sheet('加到主畫面',
+      `iPhone／iPad 不允許網頁自己建立捷徑（Apple 的規定），要你手動按兩下。`,
+      [[`點${where}的分享鍵${ICON_SHARE}`, '就是「方形加向上箭頭」那個圖示，不是圓圈裡的箭頭'],
+       ['在選單裡往下滑，找「加入主畫面」', `圖示是${ICON_PLUS}，通常要滑過一整排 App 圖示才看得到`],
+       ['右上角按「新增」', '桌面就會出現 AI業務教練 的圖示']]);
+  }
+
+  // 5) 桌面瀏覽器但沒有安裝事件（Firefox、Safari，或已經裝過）
+  return sheet('加到桌面',
+    '這個瀏覽器沒有提供一鍵安裝。可以用網址列的安裝圖示，或直接用瀏覽器的選單。',
+    [['看網址列右側有沒有安裝圖示', 'Chrome／Edge 是一個螢幕加箭頭的小圖示'],
+     ['或從瀏覽器選單找「安裝」／「建立捷徑」'],
+     ['Firefox 與桌面版 Safari 目前不支援', '手機上開這個網址會比較順']]);
 };
 
 // 從桌面圖示的「快速動作」進來時直接開對應功能
@@ -1105,6 +1161,6 @@ async function boot() {
   }
   if (acct.user()) { updateWho(); syncNow(); }
   await initLogin();
-  updateAccount(); showInstallCard(); handleShortcut();
+  updateAccount(); syncInstallBtn(); handleShortcut();
 }
 boot();

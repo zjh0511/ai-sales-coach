@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1117">
@@ -139,12 +140,10 @@
       <button class="link" id="home-signout" hidden>登出帳號</button>
     </div>
 
-    <div class="card sm" id="install-card" hidden>
-      <h4>把它放到手機桌面</h4>
-      <p class="note" id="install-how"></p>
-      <button class="btn primary" id="install-go" hidden>加到主畫面</button>
-      <button class="link" id="install-dismiss">先不要，別再提醒</button>
-    </div>
+    <button class="btn install" id="install-btn" hidden>
+      <span class="t-ico">📲</span>
+      <span><b>加到主畫面</b><small>像一般 App 一樣全螢幕開啟</small></span>
+    </button>
   </div>
 </section>
 
@@ -295,6 +294,24 @@
   <header class="bar"><button class="back" data-go="home">‹</button><span>我的訓練紀錄</span></header>
   <div class="pad scroll" id="h-body"></div>
 </section>
+
+<!-- 加到主畫面的教學浮層。iPhone／iPad 沒有任何 API 可以自動建立捷徑
+     （Apple 的限制），只能把「按哪裡」講到不會認錯。 -->
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-box">
+    <h3 id="sh-title">加到主畫面</h3>
+    <p class="note" id="sh-lead"></p>
+    <div id="sh-steps"></div>
+    <div class="card sm" id="sh-why">
+      <p class="note" style="margin:0">
+        裝好之後從桌面圖示開啟，<b>沒有網址列、全螢幕</b>，用起來就是一個 App。
+        長按圖示還有捷徑可以直接跳到電話邀約、發掘需求、痛點分析。
+      </p>
+    </div>
+    <button class="btn primary" data-close>我知道了</button>
+  </div>
+</div>
 
 <div id="toast"></div>
 
