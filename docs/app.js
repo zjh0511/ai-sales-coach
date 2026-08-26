@@ -24,7 +24,8 @@ function show(name) {
   if (name === 'history') renderHistory();
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
-  if (name === 'home') { updateAccount(); checkResume(); syncInstallBtn(); updateWho(); }
+  syncInstallBtn();                                    // 三個畫面都有「加到主畫面」
+  if (name === 'home') { updateAccount(); checkResume(); updateWho(); }
 }
 
 document.addEventListener('click', e => {
@@ -973,6 +974,14 @@ function initAuth() {
   if (acct.googleReady()) {
     acct.googleButton($('#au-google'), (e, u) => e ? authMsg('err', e.message) : afterAuth())
       .catch(e => authMsg('err', e.message));
+    // Google 的登入元件在某些環境（尤其 iOS 的桌面 App／內建瀏覽器）
+    // 會靜靜地不渲染也不報錯。我們現在鼓勵使用者「先加到桌面再登入」，
+    // 所以這條路更容易被走到——沒渲染出來就明講，別讓人卡在死路上。
+    setTimeout(() => {
+      if ($('#au-google').children.length) return;
+      $('#au-google').hidden = true;
+      authMsg('', '這個環境無法使用 Google 登入，請改用下方的 E-mail 註冊或登入。');
+    }, 6000);
   } else {
     $('#au-google').hidden = true;
   }
@@ -1054,10 +1063,14 @@ window.addEventListener('beforeinstallprompt', e => {
 });
 window.addEventListener('appinstalled', () => { installEvent = null; syncInstallBtn(); });
 
-// 已經是獨立 App 就不必再提示——按鈕留著只會讓人困惑
+// 已經是獨立 App 就不必再提示——按鈕留著只會讓人困惑。
+// 三個畫面都有一顆（註冊／登入、API 金鑰、首頁）：拿到連結的同事
+// 應該能「先加到桌面、再從 App 裡登入」。
+// iOS 上桌面 App 的儲存空間與 Safari 是分開的，先在瀏覽器登入根本帶不過去，
+// 所以「先裝再登入」才是正確順序。
 function syncInstallBtn() {
-  const b = $('#install-btn');
-  if (b) b.hidden = standalone();
+  const hide = standalone();
+  document.querySelectorAll('[data-install]').forEach(b => { b.hidden = hide; });
 }
 
 // ── 教學浮層 ────────────────────────────────────────────────
@@ -1084,7 +1097,8 @@ document.querySelectorAll('#sheet [data-close]').forEach(e => {
   e.onclick = () => { $('#sheet').hidden = true; };
 });
 
-$('#install-btn').onclick = async () => {
+document.addEventListener('click', async e => {
+  if (!e.target.closest('[data-install]')) return;
   const p = platform();
 
   // 1) Android／桌面 Chrome：真的可以一鍵安裝
@@ -1139,7 +1153,7 @@ $('#install-btn').onclick = async () => {
      ['或從瀏覽器選單找「安裝」／「建立捷徑」'],
      ['macOS 的 Safari 是「檔案 → 加入 Dock」'],
      ['Firefox 桌面版沒有這個功能', '手機上開這個網址會比較順']]);
-};
+});
 
 // 從桌面圖示的「快速動作」進來時直接開對應功能
 function handleShortcut() {
