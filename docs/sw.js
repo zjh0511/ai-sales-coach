@@ -10,14 +10,17 @@
 // 注意：離線時只有「介面」打得開。演練需要呼叫 AI 服務商的 API，
 //   那一定要網路。這一點會在畫面上明確告知，不假裝可以離線練習。
 
-const VERSION = 'v9';                 // 改版時遞增，activate 時會清掉舊快取
+const VERSION = 'v10';                 // 改版時遞增，activate 時會清掉舊快取
 const CACHE = `aicoach-${VERSION}`;
 
 // 應用外殼：離線時要能顯示介面與說明
 const SHELL = [
   './', './index.html', './style.css', './app.js', './voice.js',
-  './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png',
-  './apple-touch-icon.png', './guide.html',
+  './manifest.webmanifest', './guide.html',
+  // 只預快取小尺寸圖標。512 的兩張加起來 600KB，而它們只有
+  // 「加到主畫面」時才會被系統抓取——放進預快取等於讓每個人
+  // 第一次開啟就多下載 600KB。network-first 之下它們用到時自然會被快取。
+  './icons/icon-192.png', './icons/apple-touch-icon.png',
   './account-setup.html',
   './firebase-config.js',
   './engine/account.js',
