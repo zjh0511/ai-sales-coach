@@ -1034,8 +1034,16 @@ function platform() {
   const iPhone = /iPhone|iPod/.test(ua);
   const iPad = /iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const inApp = /Line\/|FBAN|FBAV|Instagram|MicroMessenger/i.test(ua);   // LINE／FB／IG／微信
-  const iosOther = (iPhone || iPad) && /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
-  return { iPhone, iPad, ios: iPhone || iPad, inApp, iosOther };
+  // iOS 上哪個瀏覽器，只影響「分享鍵在哪」。
+  // 使用者實測回報：Chrome for iOS 也能建立捷徑（115 版之後有「加入主畫面」），
+  // 而且 iOS 限制下它是用 Safari 引擎開啟，結果與 Safari 建的一樣。
+  // 先前這裡寫「只有 Safari 能裝」是錯的，會把人擋在門外。
+  const browser = /CriOS/.test(ua) ? 'chrome'
+    : /EdgiOS/.test(ua) ? 'edge'
+    : /FxiOS/.test(ua) ? 'firefox'
+    : /OPiOS|OPT\//.test(ua) ? 'opera'
+    : 'safari';
+  return { iPhone, iPad, ios: iPhone || iPad, inApp, browser };
 }
 
 let installEvent = null;
@@ -1095,24 +1103,32 @@ $('#install-btn').onclick = async () => {
       '你現在是從 <b>LINE／Facebook 之類的 App 內建瀏覽器</b>開啟的，'
       + '這種瀏覽器<b>沒有</b>「加入主畫面」的功能。先換到系統瀏覽器就可以了。',
       [[`點右上角的${ICON_MORE}`, '有些版本在右下角，圖示是三個點或箭頭'],
-       ['選「用 Safari 開啟」或「用瀏覽器開啟」', 'Android 是「用 Chrome 開啟」'],
+       ['選「用 Safari 開啟」或「用其他瀏覽器開啟」', 'Safari 或 Chrome 都可以，Android 選 Chrome'],
        ['在瀏覽器裡再按一次這顆「加到主畫面」']]);
   }
 
-  // 3) iPhone／iPad 但不是 Safari：Chrome、Edge 等在 iOS 上做不到
-  if (p.iosOther) {
-    return sheet('請用 Safari 開啟',
-      'iPhone／iPad 上<b>只有 Safari</b> 能把網頁加到主畫面，這是 Apple 的限制。',
-      [['複製這一頁的網址'], ['開啟 Safari，貼上網址'], ['再按一次這顆「加到主畫面」']]);
-  }
-
-  // 4) iPhone／iPad Safari：沒有任何 API 可以自動建立捷徑，只能教
+  // 3) iPhone／iPad：沒有 API 可以自動建立捷徑（Apple 的規定），只能教。
+  //    Safari 與 Chrome 都做得到，差別只在「分享鍵在哪」——講錯位置比不講更糟。
   if (p.ios) {
-    const where = p.iPad ? '螢幕<b>右上角</b>' : '螢幕<b>最下方</b>';
+    // 每個瀏覽器給完整句子，不套版——套版會生出
+    //「點…選單裡的『分享』的分享鍵」這種讀不下去的句子。
+    const STEP1 = {
+      safari: [`點${p.iPad ? '螢幕<b>右上角</b>（網址列右邊）' : '螢幕<b>最下方中間</b>'}的分享鍵${ICON_SHARE}`,
+        '就是「方形加向上箭頭」那個圖示，不是圓圈裡的箭頭'],
+      chrome: [`點<b>網址列右邊</b>的分享鍵${ICON_SHARE}`,
+        '找不到的話，點右下角的 ⋯ 再選「分享」'],
+      edge: ['點螢幕最下方的 <b>⋯</b> → 選「分享」', '再從系統的分享選單往下找'],
+      firefox: ['點網址列右邊的 <b>⋯</b> → 選「分享」', '再從系統的分享選單往下找'],
+      opera: ['從瀏覽器選單選「分享」', '再從系統的分享選單往下找'],
+    };
+    const NAME = { safari: 'Safari', chrome: 'Chrome', edge: 'Edge', firefox: 'Firefox', opera: 'Opera' };
+    const hint = p.browser === 'safari' ? ''
+      : `你現在用的是 <b>${NAME[p.browser]}</b>，它建立的捷徑在 iOS 上一樣是全螢幕開啟，不必換瀏覽器。`;
     return sheet('加到主畫面',
-      `iPhone／iPad 不允許網頁自己建立捷徑（Apple 的規定），要你手動按兩下。`,
-      [[`點${where}的分享鍵${ICON_SHARE}`, '就是「方形加向上箭頭」那個圖示，不是圓圈裡的箭頭'],
-       ['在選單裡往下滑，找「加入主畫面」', `圖示是${ICON_PLUS}，通常要滑過一整排 App 圖示才看得到`],
+      `iPhone／iPad 不允許網頁自己建立捷徑（Apple 的規定），要你手動按兩下。${hint}`,
+      [STEP1[p.browser],
+       ['在選單裡往下滑，找「加入主畫面」',
+        `圖示是${ICON_PLUS}，通常要滑過一整排 App 圖示才看得到`],
        ['右上角按「新增」', '桌面就會出現 AI業務教練 的圖示']]);
   }
 
@@ -1121,7 +1137,8 @@ $('#install-btn').onclick = async () => {
     '這個瀏覽器沒有提供一鍵安裝。可以用網址列的安裝圖示，或直接用瀏覽器的選單。',
     [['看網址列右側有沒有安裝圖示', 'Chrome／Edge 是一個螢幕加箭頭的小圖示'],
      ['或從瀏覽器選單找「安裝」／「建立捷徑」'],
-     ['Firefox 與桌面版 Safari 目前不支援', '手機上開這個網址會比較順']]);
+     ['macOS 的 Safari 是「檔案 → 加入 Dock」'],
+     ['Firefox 桌面版沒有這個功能', '手機上開這個網址會比較順']]);
 };
 
 // 從桌面圖示的「快速動作」進來時直接開對應功能
