@@ -12,6 +12,8 @@ import { officeText } from '../docs/engine/docx.js';
 import { scrubBrands } from '../docs/engine/prompts.js';
 import * as P from '../docs/engine/prompts.js';
 import { merge } from '../docs/engine/account.js';
+import { createAdapter } from '../docs/engine/gateway.js';
+import { toTW, simplifiedLeft } from '../docs/engine/zhtw.js';
 import { loadKeys } from './keys.mjs';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,6 +98,69 @@ if (run(1)) {
     const cap = merge({ history: Array.from({ length: 150 }, (_, i) => ({ at: i + 1 })) }, {});
     ok(cap.history.length === 100, '紀錄上限 100 筆', String(cap.history.length));
     ok(cap.history[0].at === 150, '超過上限時保留最新的，丟掉最舊的');
+  }
+  // 模型挑選。這是會「默默用錯模型」的地方——不會報錯，只會變慢或變差。
+  console.log('');
+  console.log('=== 1f. 模型自動挑選 ===');
+  {
+    const K = 'x'.repeat(40);                 // 只測挑選邏輯，不發任何請求
+    const pick = (p, models) => { const a = createAdapter(p, K); a._rank(models); return a.status(); };
+
+    // Gemini 預設推薦 3.5 Flash Lite（使用者指定；也與實測一致：
+    // 免費額度下 3.5-flash 被限流到 26.5 秒，flash-lite 是 1.1 秒）
+    const g = pick('gemini', ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.7-pro']);
+    ok(g.auto.fast === 'gemini-3.5-flash-lite', 'Gemini 角色扮演用 3.5 Flash Lite', g.auto.fast);
+    ok(g.recommended[0] === 'gemini-3.5-flash-lite', 'Gemini 的 ★ 第一名是 3.5 Flash Lite');
+    ok(g.auto.judge !== 'gemini-3.5-flash-lite', '評分仍用較大的模型（一次演練只跑一次，品質優先）', g.auto.judge);
+    ok(pick('gemini', ['gemini-3.7-flash', 'gemini-4.0-flash-lite', 'gemini-4.2-flash-lite']).auto.fast
+       === 'gemini-4.2-flash-lite', '3.5 被下架時自動挑最新的 flash-lite');
+
+    // Groq 預設用 Qwen 27B（使用者指定）。用比對模式而非寫死 ID：
+    // 2026-08-21 查證 Groq 上是 qwen/qwen3.6-27b，沒有 3.8 版
+    const q = pick('groq', ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'qwen/qwen3.6-27b', 'openai/gpt-oss-20b']);
+    ok(q.auto.fast === 'qwen/qwen3.6-27b', 'Groq 角色扮演用 Qwen 27B', q.auto.fast);
+    ok(q.auto.judge === 'qwen/qwen3.6-27b', 'Groq 評分也用 Qwen 27B');
+    ok(pick('groq', ['llama-3.1-8b-instant', 'qwen/qwen3.6-27b', 'qwen/qwen3.8-27b']).auto.fast
+       === 'qwen/qwen3.8-27b', 'Groq 上架更新版的 Qwen 27B 會自動接上');
+    ok(pick('groq', ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile']).auto.fast
+       === 'llama-3.1-8b-instant', '完全沒有 Qwen 時退回 llama，不會挑到不存在的模型');
+
+    // 「同模式命中多個時選較新的」不能弄壞其他服務商
+    ok(pick('anthropic', ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5']).auto.fast
+       === 'claude-haiku-4-5', 'Anthropic 的挑選不受影響');
+    ok(pick('openrouter', ['google/gemini-3.7-flash', 'openai/gpt-5.2-mini', 'anthropic/claude-opus-5']).auto.fast
+       === 'google/gemini-3.7-flash', 'OpenRouter 的挑選不受影響');
+  }
+  // 簡體字轉繁體。提示詞層已經寫了「不使用簡體字」，但實測 Groq 的
+  // qwen/qwen3.8-27b 照樣寫出「打扰」「班级里」——這是程式層的最後一道防線。
+  console.log('');
+  console.log('=== 1g. 簡體字轉繁體 ===');
+  {
+    const cases = [
+      ['打扰您了', '打擾您了'],
+      ['一个班级，什么事情是必须先处理的？', '一個班級，什麼事情是必須先處理的？'],
+      ['保险规划与医疗费用', '保險規劃與醫療費用'],
+      ['经济压力与终身险', '經濟壓力與終身險'],
+      ['继续讨论投资报酬与风险', '繼續討論投資報酬與風險'],
+      ['头发很长', '頭髮很長'],
+    ];
+    for (const [inp, want] of cases) ok(toTW(inp) === want, `轉換「${inp}」`, toTW(inp));
+
+    // 已經是繁體的不該被動到——誤轉比不轉更糟
+    const tw = '台灣人壽的業務員很專業，客戶說他很滿意';
+    ok(toTW(tw) === tw, '純繁體輸入完全不變');
+    ok(toTW('gemini-3.5-flash-lite qwen/qwen3.8-27b') === 'gemini-3.5-flash-lite qwen/qwen3.8-27b',
+       '模型名稱等非中文內容不受影響');
+
+    // 歧義字刻意不轉：轉錯會把「公里」變成「公裡」，那比留著簡體字更糟
+    ok(toTW('公里') === '公里', '一字多形的歧義字刻意不轉（公里）');
+
+    // 冪等：轉過的再轉一次必須一樣，否則同步或快取時會越轉越亂
+    ok(cases.every(([i]) => toTW(toTW(i)) === toTW(i)), '轉兩次結果相同（冪等）');
+
+    // 非字串進來不能炸——Gateway 會把整個回應丟進來
+    ok(toTW(undefined) === undefined && toTW(null) === null && toTW('') === '', '非字串輸入安全通過');
+    ok(simplifiedLeft('打扰') === '扰' && simplifiedLeft('打擾') === '', '殘留偵測可用（用來衡量模型乾不乾淨）');
   }
 }
 

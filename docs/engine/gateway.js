@@ -1,6 +1,8 @@
 // Model Gateway — 唯一對外的模型介面，支援多家 AI 供應商。
 // 每位使用者用自己的金鑰；金鑰只存在使用者瀏覽器與當次請求中，伺服器不落地保存。
 
+import { toTW } from './zhtw.js';
+
 // ── 供應商清單（給前端選單用）──────────────────────────────────
 export const PROVIDERS = {
   gemini: {
@@ -17,7 +19,7 @@ export const PROVIDERS = {
     hint: 'sk-ant-… 開頭', url: 'https://console.anthropic.com/settings/keys', file: true,
   },
   groq: {
-    label: 'Groq', note: '有免費額度，速度極快',
+    label: 'Groq', note: '有免費額度，速度極快；預設用 Qwen 27B',
     hint: 'gsk_… 開頭', url: 'https://console.groq.com/keys', file: false,
   },
   openrouter: {
@@ -40,13 +42,23 @@ const OPENAI_COMPAT = {
 
 // 角色扮演要快（fast），評分要準（judge）。依模型名稱特徵挑選，不寫死版本號。
 const PICK = {
+  // Gemini 預設推薦 3.5-flash-lite（使用者指定）。也與實測一致：
+  // 免費額度下 gemini-3.5-flash 被限流到 26.5 秒，flash-lite 是 1.1 秒。
+  // 評分（judge）仍優先用較大的 flash——它一次演練只跑一次，品質比延遲重要。
   gemini: {
-    fast: [/^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, /^gemini-3\.5-flash-lite$/, /flash-lite$/, /flash$/],
+    fast: [/^gemini-3\.5-flash-lite$/, /flash-lite$/, /^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, /flash$/],
     judge: [/^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, /^gemini-3\.5-flash-lite$/, /pro$/, /flash$/],
   },
   openai: { fast: [/mini/, /^gpt-/], judge: [/^gpt-5/, /^gpt-4\.1$/, /^gpt-4o$/, /^gpt-/] },
   anthropic: { fast: [/haiku/, /sonnet/], judge: [/sonnet/, /opus/, /haiku/] },
-  groq: { fast: [/instant/, /8b/, /scout/, /llama/], judge: [/70b/, /versatile/, /llama/] },
+  // Groq 預設用 Qwen 27B（使用者指定）。
+  // 2026-08-21 實測：Groq 同時提供 qwen/qwen3.6-27b 與 qwen/qwen3.8-27b。
+  // 官方文件那頁只列到 3.6，是過期的——只有真的打 /models 才問得出來。
+  // 用比對模式而不是寫死 ID：命中多個時 _rank 會選版本較新的，所以現在用 3.8；
+  groq: {
+    fast: [/^qwen\/qwen[\d.]*-?27b$/i, /qwen.*27b/i, /qwen/i, /instant/, /8b/, /scout/, /llama/],
+    judge: [/^qwen\/qwen[\d.]*-?27b$/i, /qwen.*27b/i, /qwen/i, /70b/, /versatile/, /llama/],
+  },
   // OpenRouter 有 400 多個模型，預設挑中文表現好且延遲低的；:free 模型實測中文品質差，不列入自動
   openrouter: {
     fast: [/^google\/gemini-[\d.]+-flash$/, /^anthropic\/claude-[\w.-]*-fast$/,
@@ -100,9 +112,25 @@ class Base {
       .map(m => ({ ...m, free: !!m.free }));
     const ids = this.all.map(m => m.id);
     const p = PICK[this.provider] || { fast: [/./], judge: [/./] };
+    // 同一個模式命中多個模型時，選版本較新的。
+    // 不這樣做的話是「服務商清單裡誰先出現誰贏」——那是任意的，
+    // 而且會在服務商上架新版時默默繼續用舊的（例如 qwen3.6-27b 與 qwen3.8-27b
+    // 都符合同一個模式，就會一直停在 3.6）。
+    // 寫死完整 ID 的模式只會命中一個，不受影響——那些是實測結論，不該被動到。
+    const ver = id => (id.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+    const newer = (a, b) => {
+      const x = ver(a), y = ver(b);
+      for (let i = 0; i < Math.max(x.length, y.length); i++) {
+        const d = (y[i] || 0) - (x[i] || 0);
+        if (d) return d;
+      }
+      return 0;                                  // 版本相同 → 維持服務商的原順序
+    };
     const by = pats => {
       const out = [];
-      for (const re of pats) for (const m of ids) if (re.test(m) && !out.includes(m)) out.push(m);
+      for (const re of pats) {
+        for (const m of ids.filter(m => re.test(m)).sort(newer)) if (!out.includes(m)) out.push(m);
+      }
       return out.length ? out.slice(0, 5) : ids.slice(0, 3);
     };
     this.autoFast = by(p.fast);
@@ -181,7 +209,14 @@ class Base {
       if (Date.now() > deadline) break;                    // 總時限到了就不再試下一個模型
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
+          // 簡體字的最後一道防線。提示詞層已經明寫「不使用簡體字」，
+          // 但實測 qwen/qwen3.8-27b 照樣寫出「打扰」「班级里」——
+          // 擋在這裡，六大功能一次涵蓋（演練回覆、人設、示範話術、評分、教練對話）。
           const r = await this._call(model, text, opts);
+          // _call 回傳的是 { text, ms, model } 物件，要轉的是裡面的 text。
+          // （第一版寫成 toTW(await this._call(...))，型別不符就整包原樣回傳，
+          //   轉換靜默失效——這種錯不會拋例外，只會讓簡體字繼續出現。）
+          if (typeof r?.text === 'string') r.text = toTW(r.text);
           // 不是第一順位卻成功 → 告訴使用者現在正在用備援模型
           if (model !== list[0]) this.onEvent?.({ type: 'fallback', from: list[0], to: model });
           return r;
@@ -327,12 +362,29 @@ class OpenAICompatAdapter extends Base {
         maxOut: m.top_provider?.max_completion_tokens || null,
         // 只保留「純文字輸出」的模型。依名稱過濾會漏——例如 google/lyria 是音樂生成，
         // 但輸出模態是 ["text","audio"]，名稱裡完全看不出來。
+        //
+        // 欄位位置各家不同：OpenRouter 放在 architecture 底下，Groq 放在最上層。
+        // 原本只讀 architecture，等於這個過濾對 Groq 完全沒作用
+        // （canopylabs/orpheus 是語音合成，output_modalities 是 ["speech"]，就這樣混進清單）。
         textOnly: (() => {
-          const o = m.architecture?.output_modalities;
-          return !Array.isArray(o) || (o.length === 1 && o[0] === 'text');
+          const a = m.architecture || m;
+          const o = a.output_modalities;
+          if (Array.isArray(o)) return o.length === 1 && o[0] === 'text';
+          return true;                       // 沒回報就不排除，寧可多列也不要少列
         })(),
+        // 輸入不要求「只有文字」——qwen3.8-27b 是 ["text","image"]，那是加分不是問題
+        textIn: (() => {
+          const a = m.architecture || m;
+          const i = a.input_modalities;
+          return !Array.isArray(i) || i.includes('text');
+        })(),
+        // 上下文太小的模型不是「比較弱」，是根本裝不下我們的提示詞。
+        // 實例：Groq 的 meta-llama/llama-prompt-guard-2-86m 是提示詞注入偵測用的
+        // 分類器，context_window 只有 512——名稱、模態都看不出它不能對話。
+        ctx: m.context_length || m.context_window || m.top_provider?.context_length || null,
       }))
-      .filter(m => m.textOnly)
+      .filter(m => m.textOnly && m.textIn)
+      .filter(m => !m.ctx || m.ctx >= 8192)
       // :batch 是非同步批次介面，不能用在即時對話
       .filter(m => !/embed|whisper|tts|dall-e|moderation|realtime|transcribe|:batch/.test(m.id));
     if (!names.length) throw new Error('這把金鑰沒有可用的模型');

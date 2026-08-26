@@ -88,11 +88,11 @@ https://zjh0511.github.io/ai-sales-coach/
 
 | 服務商 | 免費額度 | 可直接讀 PDF | 一鍵登入 | 狀態 |
 |---|:--:|:--:|:--:|---|
-| Google Gemini | 有 | ✅ | — | **已實測，建議首選** |
+| Google Gemini | 有 | ✅ | — | **已實測，建議首選**（預設 3.5 Flash Lite） |
 | OpenRouter | 有免費模型 | ✗ | ✅ | **已實測**，一把金鑰可用 340+ 模型 |
 | Anthropic Claude | 無 | ✅ | — | 未實測 |
 | OpenAI | 無 | ✗ | — | 未實測 |
-| Groq | 有 | ✗ | — | 未實測 |
+| Groq | 有 | ✗ | — | **已實測**，預設 Qwen 3.8-27B，對練 0.7 秒最快；免費額度每分鐘 8000 tokens 較緊 |
 | DeepSeek | 無 | ✗ | — | 未實測 |
 
 **OpenRouter 支援一鍵登入**：選 OpenRouter 後會出現「用 OpenRouter 帳號登入」按鈕，

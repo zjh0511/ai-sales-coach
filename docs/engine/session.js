@@ -111,6 +111,14 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
   p.personality = P.scrubMeta(p.personality);
   p.communication_style = P.scrubMeta(p.communication_style);
 
+  // 較弱的模型會漏欄位。實測 Groq 的 qwen/qwen3.8-27b 就漏掉 public_summary，
+  // 演練前的畫面直接顯示「undefined」。這裡刻意不重試——重試要多花一次額度，
+  // 而 Groq 免費額度很緊；改用使用者自己填的背景組一句出來，
+  // 那是他自己打的字，一定不會洩漏隱藏需求。
+  p.public_summary = P.scrubMeta(p.public_summary)
+    || [age, background].filter(Boolean).join('，')
+    || '一位客戶';
+
   const persona = { ...p, gender, age, background, difficulty, productBrief: brief, contextNote };
   const D = P.difficultyOf(difficulty);
   // 初始信任度由程式夾在難度區間內。模型常給出偏低的值，
