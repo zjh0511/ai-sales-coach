@@ -19,8 +19,11 @@ export const PROVIDERS = {
     hint: 'sk-ant-… 開頭', url: 'https://console.anthropic.com/settings/keys', file: true,
   },
   groq: {
-    label: 'Groq', note: '有免費額度，速度極快；預設用 Qwen 27B',
-    hint: 'gsk_… 開頭', url: 'https://console.groq.com/keys', file: false,
+    // 2026-08-21 實測：Qwen 3.8-27B 每回合 0.66～0.77 秒，比 Gemini 還快。
+    // 但免費額度是「每分鐘 8000 tokens」，而且每個模型各自計算——
+    // 建立客戶與評分容易撞到，會自動降到 3.6 再回來，那是正常行為。
+    label: 'Groq', note: '預設 Qwen 27B，對練速度最快；免費額度較緊',
+    hint: 'gsk_… 開頭', url: 'https://console.groq.com/keys', file: false, verified: true,
   },
   openrouter: {
     label: 'OpenRouter', note: '一把金鑰可用多家模型，支援一鍵登入',
