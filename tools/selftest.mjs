@@ -12,7 +12,7 @@ import { officeText } from '../docs/engine/docx.js';
 import { scrubBrands } from '../docs/engine/prompts.js';
 import * as P from '../docs/engine/prompts.js';
 import { merge } from '../docs/engine/account.js';
-import { createAdapter } from '../docs/engine/gateway.js';
+import { createAdapter, friendlyError } from '../docs/engine/gateway.js';
 import { toTW, simplifiedLeft } from '../docs/engine/zhtw.js';
 import { loadKeys } from './keys.mjs';
 
@@ -111,7 +111,7 @@ if (run(1)) {
     const g = pick('gemini', ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.7-pro']);
     ok(g.auto.fast === 'gemini-3.5-flash-lite', 'Gemini 角色扮演用 3.5 Flash Lite', g.auto.fast);
     ok(g.recommended[0] === 'gemini-3.5-flash-lite', 'Gemini 的 ★ 第一名是 3.5 Flash Lite');
-    ok(g.auto.judge !== 'gemini-3.5-flash-lite', '評分仍用較大的模型（一次演練只跑一次，品質優先）', g.auto.judge);
+    ok(g.auto.judge === 'gemini-3.5-flash-lite', '評分也預設用 3.5 Flash Lite（使用者指定）', g.auto.judge);
     ok(pick('gemini', ['gemini-3.7-flash', 'gemini-4.0-flash-lite', 'gemini-4.2-flash-lite']).auto.fast
        === 'gemini-4.2-flash-lite', '3.5 被下架時自動挑最新的 flash-lite');
 
@@ -161,6 +161,253 @@ if (run(1)) {
     // 非字串進來不能炸——Gateway 會把整個回應丟進來
     ok(toTW(undefined) === undefined && toTW(null) === null && toTW('') === '', '非字串輸入安全通過');
     ok(simplifiedLeft('打扰') === '扰' && simplifiedLeft('打擾') === '', '殘留偵測可用（用來衡量模型乾不乾淨）');
+  }
+  // ── A1：評分失敗時，整場演練不能跟著消失 ─────────────────────
+  // 原本 finish() 在呼叫評分之前就清掉 sessionId，評分也一開始就把狀態改成
+  // EVALUATING；而「接回」只認 ROLEPLAY。模型逾時或額度用完，逐字稿就沒了。
+  console.log('');
+  console.log('=== 1h. 評分失敗不弄丟演練 ===');
+  {
+    const mem = new Map();
+    globalThis.sessionStorage = {
+      getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
+    };
+    const SE = await import('../docs/engine/session.js?a1');     // 新的實例才讀得到上面這個 sessionStorage
+    const persona = {
+      name: '陳先生', public_summary: '45 歲國小老師', opening_line: '喂，你好？',
+      voice_hint: { rate: 1, pitch: 1 }, trust: 70, personality: '溫和', communication_style: '客氣',
+      hidden_needs: ['擔心孩子教育費'], scenario: { objective: '約到見面' },
+      demo: { opening: '您好，我是○○人壽的○○', key_question: '最近忙嗎？', objection_handling: { customer: '沒空', you: '我理解' } },
+    };
+    let evalFails = true;
+    const gw = { generate: async (text, opts) => {
+      if (opts?.tier === 'judge') {
+        if (evalFails) throw new Error('429 額度用盡');
+        return { text: JSON.stringify({
+          scores: { fluency: { score: 4, evidence: '' }, friendliness: { score: 4, evidence: '' } },
+          summary: '不錯', improvements: [], example_script: '', next_challenge: '',
+        }), ms: 1, model: 'fake' };
+      }
+      if (/opening_line/.test(text)) return { text: JSON.stringify(persona), ms: 1, model: 'fake' };
+      return { text: JSON.stringify({ say: '嗯，你說說看。', trust_delta: 0, revealed: [], end: false }), ms: 1, model: 'fake' };
+    } };
+
+    const pub = await SE.startSession(gw, { mode: 'call', gender: '男', age: '45', background: '老師', difficulty: 1 });
+    const s = SE.getSession(pub.sessionId);
+    SE.beginRoleplay(s);
+    await SE.handleTurn(gw, s, '陳先生您好，我是○○人壽的○○');
+    await SE.handleTurn(gw, s, '想跟您約個時間聊聊');
+
+    let threw = false;
+    try { await SE.evaluate(gw, s); } catch { threw = true; }
+    ok(threw, '評分失敗時確實往外拋錯（讓畫面知道要顯示重試）');
+    ok(s.state === 'COMPLETED', '失敗後狀態退回 COMPLETED（對話已結束、待評分）', s.state);
+    ok(!!SE.getSession(pub.sessionId), '失敗後 session 仍在');
+    const p = SE.pendingSession();
+    ok(p?.needsFeedback === true, '首頁看得到「完成上次演練的評分」', JSON.stringify(p && { needsFeedback: p.needsFeedback }));
+    ok(p?.turns === 2, '逐字稿完整保留（2 個回合）', String(p?.turns));
+
+    evalFails = false;
+    const fb = await SE.evaluate(gw, s);
+    ok(!!fb?.scores, '重新評分成功');
+    ok(s.state === 'FEEDBACK_READY', '成功後狀態為 FEEDBACK_READY');
+    SE.dropSession(s.id);
+    ok(SE.pendingSession() === null, '評分成功並清掉之後，首頁不再提示');
+    delete globalThis.sessionStorage;
+  }
+
+  // ── A2：帳號被停用或刪除時要真的登出；沒網路時不能登出 ─────────
+  console.log('');
+  console.log('=== 1i. 登入失效的判斷 ===');
+  {
+    const A = await import('../docs/engine/account.js');
+    const realFetch = globalThis.fetch;
+    let refresh = null, refreshCalls = 0;
+    const res = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+    globalThis.fetch = async url => {
+      if (String(url).includes('accounts:signInWithPassword'))
+        return res(200, { localId: 'u1', email: 't@example.com', idToken: 'old', refreshToken: 'r1', expiresIn: '30' });
+      if (String(url).includes('securetoken')) { refreshCalls++; return refresh(); }
+      throw new Error('unexpected ' + url);
+    };
+    // expiresIn 30 秒 − 60 秒安全邊際 → 一登入就是「已過期」，下一次 token() 必定走更新
+    const login = () => A.signInEmail('t@example.com', 'x');
+    try {
+      await login();
+      refresh = async () => { throw new TypeError('fetch failed'); };
+      ok(await A.token() === null && !!A.user(), '沒網路：拿不到 token，但保留登入狀態（離線照常可用）');
+
+      refresh = async () => res(503, {});
+      ok(await A.token() === null && !!A.user(), '伺服器 5xx：暫時性錯誤，保留登入狀態');
+
+      refreshCalls = 0;
+      refresh = async () => { await new Promise(r => setTimeout(r, 30)); return res(200, { id_token: 'new', refresh_token: 'r2', expires_in: '3600' }); };
+      const [t1, t2] = await Promise.all([A.token(), A.token()]);
+      ok(t1 === 'new' && t2 === 'new' && refreshCalls === 1, '同時要 token：只送一次更新請求', `calls=${refreshCalls}`);
+
+      await login();
+      refresh = async () => res(400, { error: { message: 'TOKEN_EXPIRED' } });
+      ok(await A.token() === null && A.user() === null, '帳號失效（400）：真的登出，下次回首頁會被擋在登入頁');
+
+      await login();
+      refresh = async () => res(403, { error: { message: 'USER_DISABLED' } });
+      ok(await A.token() === null && A.user() === null, '帳號被停用（403）：真的登出');
+    } finally {
+      globalThis.fetch = realFetch;
+      A.signOut();
+    }
+  }
+
+  // ── B2：語音引擎在手機上的三個卡點 ──────────────────────────
+  // 用假的朗讀引擎與辨識器重現：播完不觸發 onend、收音卡住、拿到結果卻不結束。
+  console.log('');
+  console.log('=== 1j. 語音穩定度 ===');
+  {
+    const synth = {
+      speaking: false, pending: false, paused: false, dropOnEnd: false, neverStart: false,
+      speak(u) {
+        if (this.neverStart) return;
+        this.pending = true;
+        setTimeout(() => {
+          this.pending = false; this.speaking = true; u.onstart?.();
+          setTimeout(() => { this.speaking = false; if (!this.dropOnEnd) u.onend?.(); }, 40);
+        }, 10);
+      },
+      cancel() { this.speaking = false; this.pending = false; }, resume() {}, getVoices: () => [],
+    };
+    class FakeSR {
+      constructor() { FakeSR.last = this; }
+      start() { FakeSR.plan?.(this); }
+      stop() { this.stopped = true; }
+      abort() { this.aborted = true; }
+    }
+    const said = (r, t) => r.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript: t }], { isFinal: true })] });
+    globalThis.window = { speechSynthesis: synth, SpeechRecognition: FakeSR };
+    globalThis.speechSynthesis = synth;
+    globalThis.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } };
+
+    const V = await import('../docs/voice.js?b2');
+    if (V.TIMING) Object.assign(V.TIMING, { stall: 150, end: 100, start: 200, poll: 20 });
+    const got = { final: [], empty: 0, stall: 0 };
+    const reset = () => { got.final = []; got.empty = 0; got.stall = 0; };
+    const v = new V.Voice({
+      onFinal: t => got.final.push(t), onEmpty: () => got.empty++, onStall: () => got.stall++, onState() {}, onPartial() {},
+    });
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+
+    // 朗讀：裝置播完卻不觸發 onend
+    synth.dropOnEnd = true;
+    let t0 = Date.now();
+    await v.speak('好的沒問題');
+    const dt = Date.now() - t0;
+    ok(dt < 500, `播完漏掉 onend：輪詢偵測到播完就放行（${dt}ms；原本要等保險絲 ${3000 + 5 * 260}ms）`);
+    synth.dropOnEnd = false;
+
+    // 朗讀：根本沒開始播放
+    synth.neverStart = true;
+    t0 = Date.now();
+    await v.speak('測試');
+    ok(Date.now() - t0 < 600, '朗讀一直沒開始：時間到就放行，不會卡死');
+    synth.neverStart = false;
+
+    // 收音：啟動了但什麼都沒回
+    reset(); FakeSR.plan = () => {};
+    v.listen(); await wait(250);
+    ok(got.stall === 1 && !got.final.length && v.state === 'idle', '收音卡住：偵測到並回報，交給畫面自動重接');
+
+    // 收音：拿到最終結果但 onend 沒來
+    reset(); FakeSR.plan = r => setTimeout(() => said(r, '您好'), 10);
+    v.listen(); await wait(200);
+    ok(got.final.length === 1 && got.final[0] === '您好', '拿到結果但沒觸發 onend：強制收尾，這一句照樣送出');
+
+    // 收音：正常結束——同一句不能送兩次（onend 與強制收尾都會走到收尾）
+    reset(); FakeSR.plan = r => setTimeout(() => { said(r, '好'); setTimeout(() => r.onend?.(), 5); }, 10);
+    v.listen(); await wait(200);
+    ok(got.final.length === 1, '正常結束：同一句只送出一次', String(got.final.length));
+
+    // 收音：沒聽到聲音
+    reset(); FakeSR.plan = r => setTimeout(() => { r.onerror?.({ error: 'no-speech' }); r.onend?.(); }, 10);
+    v.listen(); await wait(80);
+    ok(got.empty === 1 && got.stall === 0, '沒聽到聲音：回報「這一輪是空的」而不是錯誤');
+
+    // 使用者中止後，舊辨識器晚到的事件必須被忽略
+    reset(); FakeSR.plan = () => {};
+    v.listen(); const old = FakeSR.last; v.abortListening();
+    said(old, '晚到的字'); old.onend?.(); await wait(250);
+    ok(!got.final.length && !got.stall && !got.empty, '中止後舊辨識器晚到的事件全部被忽略');
+
+    ok(V.MIC_AFTER_TTS_MS === 300, '非 iOS 裝置播完後等 300ms 開麥克風（iOS 為 3500ms）');
+    delete globalThis.window; delete globalThis.speechSynthesis; delete globalThis.SpeechSynthesisUtterance;
+  }
+  // ── 備援鏈：2026-09-29 實際踩到的情況 ─────────────────────────
+  // gemini-3.5-flash-lite 回 503（需求量過高）→ 降級到的模型回 404
+  // （已不開放給新使用者）→ 原本整條鏈直接中止，根本沒去試健康的 3.7-flash。
+  console.log('');
+  console.log('=== 1k. 備援鏈遇到塞車與下架模型 ===');
+  {
+    const K = 'x'.repeat(40);
+    const a = createAdapter('gemini', K);
+    a._rank(['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-3.7-flash']);
+    ok(a.fastList.indexOf('gemini-2.5-flash-lite') > a.fastList.indexOf('gemini-3.7-flash'),
+      '已下架的 2.x 不再排在健康的 3.7-flash 前面', a.fastList.join(' → '));
+
+    const calls = [];
+    a._call = async m => {
+      calls.push(m);
+      if (m === 'gemini-3.5-flash-lite') throw new Error('gemini 503: This model is currently experiencing high demand');
+      if (m === 'gemini-3.1-flash-lite') throw new Error('gemini 404: This model is no longer available to new users');
+      return { text: '好', ms: 1, model: m };
+    };
+    const r = await a.generate('測試', {});
+    ok(r.model === 'gemini-3.7-flash', '塞車＋下架都跳過，最後由健康的模型回應', r.model);
+    ok(calls.filter(m => m === 'gemini-3.5-flash-lite').length === 2, '塞車的模型只重試一次就換', calls.join(' → '));
+    ok(calls.filter(m => m === 'gemini-3.1-flash-lite').length === 1, '404 的模型不重試');
+
+    calls.length = 0;
+    await a.generate('下一回合', {});
+    ok(calls[0] === 'gemini-3.7-flash', '下一回合直接用健康的模型，不必每回合先撞一次', calls.join(' → '));
+
+    // 全部都不能用：要丟出錯誤，不能掛住
+    const b = createAdapter('gemini', K);
+    b._rank(['gemini-3.5-flash-lite', 'gemini-3.7-flash']);
+    b._call = async () => { throw new Error('gemini 404: not found'); };
+    let threw = false;
+    try { await b.generate('x', {}); } catch { threw = true; }
+    ok(threw, '每個模型都 404：丟出錯誤讓畫面顯示，而不是無限重試');
+
+    // 全面塞車（2026-09-29 實際發生）：尾端的下架模型回 404，
+    // 但真正的原因是塞車——使用者該看到「服務商塞車」而不是「卡了一下」
+    const c = createAdapter('gemini', K);
+    c._rank(['gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-2.5-flash']);
+    c._call = async m => {
+      if (m === 'gemini-2.5-flash') throw new Error('gemini 404: no longer available to new users');
+      throw new Error('gemini 503: This model is currently experiencing high demand');
+    };
+    let msg = '';
+    try { await c.generate('x', {}); } catch (e) { msg = friendlyError(e.message, 'gemini') || ''; }
+    ok(/塞車/.test(msg) && /不是你的金鑰/.test(msg), '全面塞車：告訴使用者是服務商塞車、不是他的問題', msg.slice(0, 40));
+  }
+  // ── 原始碼裡不該有控制字元 ──────────────────────────────────
+  // 2026-09-29 實際發生：透過 shell → Python 改檔時，正規表示式裡的 \b 被轉義層
+  // 吃成真正的退格字元（0x08）。/‹BS›404‹BS›/ 永遠比對不到東西，程式看起來寫對了，
+  // 實際上是死的——「404 跳過壞掉的模型」這段完全沒生效，而且沒有任何錯誤訊息。
+  console.log('');
+  console.log('=== 1l. 原始碼沒有被污染的控制字元 ===');
+  {
+    const bad = [];
+    const walk = d => {
+      for (const f of fs.readdirSync(d)) {
+        const p = path.join(d, f);
+        if (fs.statSync(p).isDirectory()) { if (!/icons|node_modules/.test(f)) walk(p); continue; }
+        if (!/\.(m?js|html|css|json|webmanifest)$/.test(f)) continue;
+        fs.readFileSync(p, 'utf8').split(/\r?\n/).forEach((line, i) => {
+          if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(line)) bad.push(`${path.relative(DIR, p)}:${i + 1}`);
+        });
+      }
+    };
+    walk(path.join(DIR, 'docs'));
+    walk(path.join(DIR, 'tools'));
+    ok(!bad.length, '除了 tab 以外沒有任何控制字元', bad.slice(0, 5).join('、'));
   }
 }
 

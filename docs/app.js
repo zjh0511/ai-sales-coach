@@ -1,6 +1,6 @@
-import { Voice, supported, voiceInfo } from './voice.js';
+import { Voice, supported, voiceInfo, MIC_AFTER_TTS_MS } from './voice.js';
 import { api, providers, restore, onModelEvent } from './engine/api.js';
-import { startOpenRouter, finishOpenRouter, oauthSupported } from './engine/oauth.js';
+import { startOpenRouter, oauthSupported } from './engine/oauth.js';
 import * as acct from './engine/account.js';
 
 const $ = s => document.querySelector(s);
@@ -25,7 +25,12 @@ function show(name) {
   if (name === 'docs') renderDocs();
   if (name === 'models') renderModels();
   syncInstallBtn();                                    // 三個畫面都有「加到主畫面」
-  if (name === 'home') { updateAccount(); checkResume(); updateWho(); }
+  if (name === 'home') {
+    // 強制登入的把關點。帳號在使用途中失效（管理者停用、token 被撤銷）時，
+    // 不在演練中硬切畫面，而是在下一次回到首頁時擋下來。
+    if (acct.configured() && !acct.user()) { initAuth(); return show('auth'); }
+    updateAccount(); checkResume(); updateWho();
+  }
 }
 
 document.addEventListener('click', e => {
@@ -60,17 +65,15 @@ let PROVIDERS = {};
 async function initLogin() {
   PROVIDERS = providers();
 
-  // 從 OpenRouter 授權頁導回時，網址會帶 ?code=，先換成金鑰
-  try {
-    const key = await finishOpenRouter();
-    if (key) {
-      localStorage.setItem(PROV_KEY, 'openrouter');
-      localStorage.setItem(AKEY_KEY, key);
-      localStorage.removeItem(PIN_KEY);
-    }
-  } catch (e) {
-    $('#lg-msg').className = 'note err';
-    $('#lg-msg').textContent = e.message;
+  // 目前只開放 Google AI Studio。之前用 Groq、OpenRouter 等登入的人，
+  // 存著的金鑰不能再用了——清掉並說明原因，而不是讓他看到一個看不懂的錯誤。
+  const oldProvider = localStorage.getItem(PROV_KEY);
+  let migrated = false;
+  if (oldProvider && !PROVIDERS[oldProvider]) {
+    localStorage.removeItem(AKEY_KEY);
+    localStorage.removeItem(PIN_KEY);           // 別家的模型名稱在 Gemini 上不存在
+    localStorage.setItem(PROV_KEY, 'gemini');
+    migrated = true;
   }
 
   const sel = $('#lg-provider');
@@ -82,6 +85,10 @@ async function initLogin() {
   }
   sel.value = localStorage.getItem(PROV_KEY) || Object.keys(PROVIDERS)[0] || 'gemini';
   syncProvider();
+  if (migrated) {
+    $('#lg-msg').className = 'note err';
+    $('#lg-msg').textContent = '現在只支援 Google AI Studio 的 API 金鑰，請貼上你的 Gemini 金鑰（申請免費）。';
+  }
 
   // 重新整理後用已存的金鑰靜默恢復，失敗就回登入畫面
   const { provider, key } = cred();
@@ -184,8 +191,10 @@ async function checkResume() {
     const { pending } = await api('/session/pending');
     if (!pending) return;
     S.pending = pending;
-    $('#resume-info').textContent =
-      `${pending.name}　·　${pending.difficultyLabel}　·　已進行 ${pending.turns} 個回合`;
+    $('#resume-info').textContent = pending.needsFeedback
+      ? `${pending.name}　·　${pending.turns} 個回合　·　上次還沒完成評分，點這裡重新評分`
+      : `${pending.name}　·　${pending.difficultyLabel}　·　已進行 ${pending.turns} 個回合`;
+    $('#home-resume b').textContent = pending.needsFeedback ? '完成上次演練的評分' : '接回上次中斷的演練';
     btn.hidden = false;
   } catch { /* 沒有就算了，不用打擾使用者 */ }
 }
@@ -193,6 +202,12 @@ async function checkResume() {
 $('#home-resume').onclick = async () => {
   const p = S.pending;
   if (!p) return;
+  // 對話已經結束、只差評分（上次評分失敗或評分途中關掉 App）
+  if (p.needsFeedback) {
+    S.fn = p.mode; S.sessionId = p.sessionId; S.ended = true;
+    S.persona = { name: p.name, summary: p.summary, voice: p.voice };
+    return finish();
+  }
   voice.unlock();                               // 必須在使用者手勢中
   voice.resetStats();
   S.fn = p.mode;
@@ -208,7 +223,7 @@ $('#home-resume').onclick = async () => {
     for (const t of d.transcript) push('#p-log', t.speaker, t.text);
     show('play');
     setStatus('接回上次的進度，繼續說吧');
-    nextTurn();
+    nextTurn(300);
   } catch (e) {
     S.sessionId = null;
     toast(e.message);
@@ -336,7 +351,11 @@ function logout(reason) {
   show('login');
 }
 
-const busy = (msg, on = true) => { $('#wait-msg').textContent = msg; if (on) show('wait'); };
+const busy = (msg, on = true) => {
+  $('#wait-msg').textContent = msg;
+  $('#wait-spin').hidden = false; $('#eval-fail').hidden = true;
+  if (on) show('wait');
+};
 
 // ── 首頁六大功能 ────────────────────────────────────────────
 document.querySelectorAll('[data-fn]').forEach(b => b.onclick = () => {
@@ -536,9 +555,27 @@ $('#f-file').onchange = async e => {
 };
 
 // ── Voice Engine ────────────────────────────────────────────
+// 自動收音的排程。用 epoch 擋掉過期的排程：使用者自己按了麥克風、
+// 打字送出、或演練結束之後，先前排定的「幾秒後開麥克風」都必須作廢，
+// 否則會在 AI 正在思考時突然開始收音。
+let listenTimer = 0, listenEpoch = 0, emptyTries = 0, stallTries = 0;
+const cancelListen = () => { clearTimeout(listenTimer); listenEpoch++; };
+
 const voice = new Voice({
   onPartial: t => { if (t) setStatus('🎙️ ' + t, 'live'); },
-  onFinal: t => submit(t),
+  onFinal: t => { emptyTries = 0; stallTries = 0; submit(t); },
+  // 沒聽到話：手機上很常見（使用者在想、在看畫面），自動再聽幾輪
+  onEmpty: () => {
+    if (++emptyTries <= 3) return nextTurn(600);
+    emptyTries = 0;
+    setStatus('沒有聽到聲音，點一下麥克風再說');
+  },
+  // 收音卡住：重接兩次，還不行就交給使用者
+  onStall: () => {
+    if (++stallTries <= 2) { setStatus('麥克風重新連接中…'); return nextTurn(800); }
+    stallTries = 0;
+    setStatus('麥克風沒有反應，點一下麥克風再試；也可以直接打字');
+  },
   onState: s => {
     const m = $('#btn-mic');
     m.classList.toggle('rec', s === 'listening');
@@ -589,14 +626,28 @@ $('#btn-start').onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
-function nextTurn() {
+// delay：剛播完朗讀就用 MIC_AFTER_TTS_MS（iOS 要等音訊通道釋放），
+// 其他情況（沒有朗讀、自動重試）用短一點的值。
+function nextTurn(delay = MIC_AFTER_TTS_MS) {
   if (S.ended) return;
-  if (supported.stt) { if (!voice.listen()) setStatus('點一下麥克風開始說話'); }
-  else setStatus('請用下方輸入框回覆');
+  if (!supported.stt) return setStatus('請用下方輸入框回覆');
+  // 使用者在客戶講話時就點了麥克風插話——麥克風已經在他手上，不必再排
+  if (voice.state === 'listening') return;
+  clearTimeout(listenTimer);
+  const ep = ++listenEpoch;
+  if (delay > 1000) setStatus('正在切回麥克風…（點麥克風可以直接開始）');
+  listenTimer = setTimeout(() => {
+    if (ep !== listenEpoch || S.ended || S.busy) return;
+    if (!document.querySelector('#s-play.on')) return;     // 已經離開演練畫面
+    if (voice.state !== 'idle') return;                    // 等待期間使用者自己開了麥克風
+    if (!voice.listen()) setStatus('點一下麥克風開始說話');
+  }, delay);
 }
 
 $('#btn-mic').onclick = () => {
   voice.unlock();
+  cancelListen();                    // 使用者自己按了：取消排定的自動收音（也就是跳過等待）
+  emptyTries = 0; stallTries = 0;
   if (voice.state === 'speaking') { voice.stopSpeaking(); voice.listen(); }
   else if (voice.state === 'listening') voice.stopListening();
   else voice.listen();
@@ -610,6 +661,7 @@ $('#p-text').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btn-s
 
 async function submit(text) {
   if (S.busy || S.ended || !S.sessionId) return;
+  cancelListen();
   S.busy = true;
   push('#p-log', 'user', text);
   setStatus('思考中…', 'think');
@@ -620,7 +672,7 @@ async function submit(text) {
       push('#p-log', 'system', d.text);
       setStatus(''); S.busy = false;
       toast('偵測到合規風險，演練已暫停');
-      return nextTurn();
+      return nextTurn(300);
     }
 
     push('#p-log', 'customer', d.text);
@@ -639,22 +691,48 @@ async function submit(text) {
   }
 }
 
-$('#btn-end').onclick = () => { S.ended = true; voice.reset(); finish(); };
+$('#btn-end').onclick = () => { S.ended = true; cancelListen(); voice.reset(); finish(); };
 
 async function finish() {
   if (!S.sessionId) return show('home');
-  voice.reset(); busy('正在分析你剛才的表現…');
-  const id = S.sessionId; S.sessionId = null;
+  cancelListen(); voice.reset(); busy('正在分析你剛才的表現…');
+  const id = S.sessionId;
   try {
     const fb = await api('/session/end', { sessionId: id });
-    fb.voiceStats = voice.stats();          // 使用者感知的延遲，只有前端量得到
+    S.sessionId = null;                     // 評分成功才放掉——之前是呼叫前就清掉，
+    fb.voiceStats = voice.stats();          // 評分一失敗整場逐字稿就跟著消失
     renderFeedback(fb); saveHistory(fb); show('fb');
-  } catch (e) { if (e.auth) return; toast(e.message); show('home'); }
+  } catch (e) {
+    if (e.auth) {
+      // 金鑰失效。不能呼叫 logout()——它會 abort() 把逐字稿一起丟掉。
+      // 只放掉畫面上的指標、清掉金鑰；session 仍留在引擎與 sessionStorage，
+      // 重新登入後首頁會出現「完成上次演練的評分」。
+      S.sessionId = null;
+      localStorage.removeItem(AKEY_KEY);
+      $('#lg-msg').className = 'note err';
+      $('#lg-msg').textContent = e.message + '。重新登入後，首頁可以完成上次演練的評分。';
+      return show('login');
+    }
+    // 逐字稿還在引擎裡（也存在 sessionStorage），留在這個畫面讓使用者重試。
+    // 最常見的原因是免費額度一時用完（Groq 每分鐘 8000 tokens、Gemini 429），
+    // 等一下再按通常就好了。
+    $('#wait-spin').hidden = true;
+    $('#wait-msg').textContent = '評分沒有完成';
+    $('#eval-why').textContent = e.message.replace(/[。.！!\s]+$/, '')
+      + '。你的對話紀錄都還在，稍等一下再按「重新評分」就可以。';
+    $('#eval-fail').hidden = false;
+  }
 }
+
+$('#eval-retry').onclick = () => finish();
+$('#eval-drop').onclick = () => {
+  if (!confirm('放棄之後，這場演練的對話紀錄就不會留下。確定？')) return;
+  abort(); show('home');
+};
 
 function abort() {
   if (S.sessionId) api('/session/abort', { sessionId: S.sessionId }).catch(() => {});
-  S.sessionId = null; S.ended = true; voice.reset();
+  S.sessionId = null; S.ended = true; cancelListen(); voice.reset();
 }
 
 $('#btn-again').onclick = () => openIntake(S.fn);
@@ -930,9 +1008,19 @@ async function syncNow(loud = false) {
   if (!acct.configured() || !acct.user() || syncing) return;
   syncing = true; setSync('busy');
   try {
-    const merged = acct.merge(bundle(), await acct.pull());
+    const remote = await acct.pull();
+    // pull() 回傳 null 代表拿不到 token。原本這裡照樣往下走、最後顯示「已同步」——
+    // 離線或帳號失效時都在謊報成功。
+    if (remote === null) {
+      syncing = false;
+      if (!acct.user()) return accountRevoked();   // token() 判定帳號已失效並登出了
+      setSync('err');                              // 多半是沒網路，下次再試
+      if (loud) toast('目前連不上雲端，紀錄先存在這台裝置，之後會自動同步');
+      return;
+    }
+    const merged = acct.merge(bundle(), remote);
     applyBundle(merged);
-    await acct.push(merged);
+    if (!await acct.push(merged)) throw new Error('寫入雲端失敗，稍後會再試');
     setSync('ok');
     if (loud) toast('已與雲端同步，共 ' + merged.history.length + ' 筆紀錄');
   } catch (e) {
@@ -942,6 +1030,13 @@ async function syncNow(loud = false) {
   syncing = false;
 }
 const syncSoon = () => { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 2500); };
+
+function accountRevoked() {
+  updateWho();
+  toast('你的帳號已失效或被停用，請重新登入', 5000);
+  const cur = document.querySelector('.screen.on')?.id;
+  if (cur === 's-home') { initAuth(); show('auth'); }
+}
 
 function updateWho() {
   const u = acct.user();

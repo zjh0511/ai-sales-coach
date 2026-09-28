@@ -66,11 +66,15 @@ export function pendingSession() {
   try {
     const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
     if (!j || Date.now() - j.touched > SESSION_TTL) return null;
-    if (j.state !== 'ROLEPLAY') return null;          // 只有演練中被打斷才值得接回
+    // ROLEPLAY：演練中被打斷，可以接著練。
+    // COMPLETED／EVALUATING：對話已結束但評分沒完成（模型逾時、額度用完、
+    // 評分途中關掉 App），逐字稿都還在，只差重新評分。
+    const needsFeedback = j.state === 'COMPLETED' || j.state === 'EVALUATING';
+    if (j.state !== 'ROLEPLAY' && !needsFeedback) return null;
     const turns = (j.history || []).filter(h => h.speaker === 'user').length;
     if (!turns) return null;                          // 一句都還沒說，重新開始更乾淨
     return {
-      sessionId: j.id, mode: j.mode, turns,
+      sessionId: j.id, mode: j.mode, turns, needsFeedback,
       name: j.persona?.name, summary: j.persona?.public_summary,
       voice: j.persona?.voice_hint || { rate: 1, pitch: 1 },
       difficultyLabel: P.difficultyOf(j.difficulty).label,
@@ -230,7 +234,9 @@ export async function handleTurn(gw, s, userText) {
   const ended = s.canEnd
     && (s.guidance >= s.maxGuidance || (data.end === true && userTurns >= MIN_TURNS));
   if (ended) s.state = 'COMPLETED';
-  if (ended) forget(s.id); else persist(s);
+  // 通話結束了但還沒評分，所以仍要留著：評分若失敗，逐字稿不能跟著消失。
+  // 只有評分成功（dropSession）才真正刪除。
+  persist(s);
 
   return {
     type: 'customer', text: say, ended, trust: s.trust,
@@ -244,7 +250,20 @@ export async function handleTurn(gw, s, userText) {
 const FILLER = /嗯|呃|那個|就是說|然後|欸/g;
 
 export async function evaluate(gw, s) {
+  // 使用者按下「結束」或客戶掛電話，對話就不會再繼續了——
+  // 評分失敗時退回 COMPLETED，而不是 ROLEPLAY。
   s.state = 'EVALUATING';
+  persist(s);
+  try {
+    return await evaluateInner(gw, s);
+  } catch (e) {
+    s.state = 'COMPLETED';
+    persist(s);
+    throw e;
+  }
+}
+
+async function evaluateInner(gw, s) {
   const userTurns = s.history.filter(h => h.speaker === 'user');
   const texts = userTurns.map(t => t.text);
   const metrics = {

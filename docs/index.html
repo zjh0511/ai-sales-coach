@@ -71,9 +71,12 @@
       <span><b>先加到主畫面</b><small>之後從桌面圖示開啟，像一般 App 一樣全螢幕</small></span>
     </button>
 
-    <label>選擇你的 AI 服務商</label>
-    <select id="lg-provider"></select>
-    <p class="note" id="lg-note"></p>
+    <!-- 目前只開放 Google AI Studio。選單保留在 DOM（程式讀它的值），但不顯示 -->
+    <select id="lg-provider" hidden></select>
+    <div class="card sm provider-fixed">
+      <b>Google AI Studio（Gemini）</b>
+      <p class="note" id="lg-note" style="margin:4px 0 0"></p>
+    </div>
 
     <div id="lg-oauth" hidden>
       <button class="btn primary" id="lg-oauth-go">用 OpenRouter 帳號登入</button>
@@ -81,11 +84,11 @@
       <div class="or-sep"><span>或手動貼上金鑰</span></div>
     </div>
 
-    <label>貼上你的 API 金鑰</label>
+    <label>貼上你的 Google AI Studio API 金鑰</label>
     <input id="lg-key" type="password" inputmode="text" autocomplete="off"
            autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在此貼上金鑰">
     <label class="inline"><input type="checkbox" id="lg-show"> 顯示金鑰</label>
-    <p class="note">還沒有金鑰？<a id="lg-link" href="#" target="_blank" rel="noopener">前往申請</a>（多數服務商有免費額度）</p>
+    <p class="note">還沒有金鑰？<a id="lg-link" href="#" target="_blank" rel="noopener">前往 Google AI Studio 申請</a>（免費，不需要信用卡）</p>
     <a class="btn guide-link" id="lg-guide" href="guide.html">📖 Google AI Studio，免費 API 申請教學</a>
 
     <div class="card sm">
@@ -254,8 +257,14 @@
 
 <!-- 分析中 -->
 <section id="s-wait" class="screen center">
-  <div class="spin"></div>
+  <div class="spin" id="wait-spin"></div>
   <p id="wait-msg">正在分析你剛才的表現…</p>
+  <!-- 評分失敗時出現：逐字稿還在，不該讓使用者白練一場 -->
+  <div id="eval-fail" class="pad" hidden style="width:100%;max-width:420px">
+    <p class="note" id="eval-why" style="text-align:center"></p>
+    <button class="btn primary" id="eval-retry">重新評分</button>
+    <button class="link" id="eval-drop">放棄這場，回首頁</button>
+  </div>
 </section>
 
 <!-- 回饋 -->

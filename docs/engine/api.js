@@ -11,7 +11,11 @@ let gw = null;                 // 目前登入的模型連線
 let current = { provider: null, key: null };
 let onEvent = null;            // 降階／額度事件通知 UI
 
-export const providers = () => PROVIDERS;
+// 開放給使用者選的服務商。引擎仍支援六家（gateway.js），
+// 但目前只開放 Google AI Studio（使用者決定）。要恢復其他家，把代號加回這裡即可。
+export const ENABLED = ['gemini'];
+export const providers = () => Object.fromEntries(
+  Object.entries(PROVIDERS).filter(([k]) => ENABLED.includes(k)));
 export const onModelEvent = fn => { onEvent = fn; if (gw) gw.onEvent = fn; };
 
 function need() {
@@ -20,6 +24,11 @@ function need() {
 }
 
 async function connect(provider, key) {
+  if (!ENABLED.includes(provider)) {
+    const e = new Error('目前只支援 Google AI Studio 的 API 金鑰');
+    e.auth = true;
+    throw e;
+  }
   const a = createAdapter(provider, key);
   try {
     await a.init();                                  // 探測可用模型，順便驗證金鑰

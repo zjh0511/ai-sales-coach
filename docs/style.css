@@ -124,6 +124,8 @@ select{width:100%;background:var(--card);border:1px solid var(--line);border-rad
 select:focus{outline:none;border-color:var(--acc)}
 label.inline{display:flex;align-items:center;gap:8px;font-weight:400;color:var(--muted);font-size:13px;margin:10px 0 0}
 label.inline input{width:auto}
+.provider-fixed{margin-top:18px}
+.provider-fixed b{font-size:15px}
 #lg-msg{min-height:20px} #lg-msg.err{color:var(--bad)} #lg-msg.ok{color:var(--ok)}
 .or-sep{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:18px 0 0}
 .or-sep::before,.or-sep::after{content:"";flex:1;height:1px;background:var(--line)}

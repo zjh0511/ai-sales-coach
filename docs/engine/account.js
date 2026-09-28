@@ -74,23 +74,44 @@ function adopt(j) {
 
 // 取一把還沒過期的 idToken；過期就用 refreshToken 換新的。
 // Firebase 的 idToken 只有一小時，不換就會在使用者練到一半時同步失敗。
+//
+// 「換不到」要分兩種，處理方式相反：
+//   - 沒網路、逾時、伺服器 5xx → 保留登入狀態，本機功能照用，下次再試
+//   - 400／401／403 → refresh token 已失效（帳號被停用或刪除、密碼被改、
+//     token 被撤銷）。這時必須真的登出。
+// 原本兩種都只回傳 null 並保留登入狀態：管理者在後台停用某位同事之後，
+// 他的 App 仍判定為已登入、照常能用，只是同步永遠靜默失敗——
+// 他的紀錄從此不會出現在報表裡，而且沒有人會發現。
+let refreshing = null;
 export async function token() {
   if (!A) return null;
   if (Date.now() < A.expAt) return A.idToken;
-  let j = null;
-  try {
-    const r = await fetch(TOKEN + '?key=' + FB.apiKey, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(A.refreshToken),
-    });
-    if (r.ok) j = await r.json();
-  } catch { /* 沒網路：當作這次拿不到 token，本機功能照用 */ }
-  if (!j?.id_token) return null;
-  A.idToken = j.id_token;
-  A.refreshToken = j.refresh_token || A.refreshToken;
-  A.expAt = Date.now() + (Number(j.expires_in || 3600) - 60) * 1000;
-  save();
-  return A.idToken;
+  if (refreshing) return refreshing;          // 同時有好幾處要 token，只送一次
+  const before = A;
+  refreshing = (async () => {
+    let r;
+    try {
+      r = await fetch(TOKEN + '?key=' + FB.apiKey, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(A.refreshToken),
+        signal: AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined,
+      });
+    } catch { return null; }                     // 沒網路或逾時：保留
+    if (A !== before) return A?.idToken || null; // 等待期間已經登出或換了帳號
+    if (r.status === 400 || r.status === 401 || r.status === 403) {
+      signOut();
+      return null;
+    }
+    if (!r.ok) return null;                      // 暫時性錯誤：保留
+    const j = await r.json().catch(() => null);
+    if (!j?.id_token) return null;
+    A.idToken = j.id_token;
+    A.refreshToken = j.refresh_token || A.refreshToken;
+    A.expAt = Date.now() + (Number(j.expires_in || 3600) - 60) * 1000;
+    save();
+    return A.idToken;
+  })();
+  try { return await refreshing; } finally { refreshing = null; }
 }
 
 export const signUpEmail = (email, password) =>

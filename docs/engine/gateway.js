@@ -43,14 +43,25 @@ const OPENAI_COMPAT = {
   deepseek: 'https://api.deepseek.com/v1',
 };
 
+// Gemini 3 以後（含未來的 4.x、10.x）的正式版 flash／flash-lite
+const GEM_LITE = /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-flash-lite$/;
+const GEM_FLASH = /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-flash$/;
+
 // 角色扮演要快（fast），評分要準（judge）。依模型名稱特徵挑選，不寫死版本號。
 const PICK = {
-  // Gemini 預設推薦 3.5-flash-lite（使用者指定）。也與實測一致：
+  // Gemini 一律預設 3.5-flash-lite（使用者指定：登入後預設使用它）。也與實測一致：
   // 免費額度下 gemini-3.5-flash 被限流到 26.5 秒，flash-lite 是 1.1 秒。
-  // 評分（judge）仍優先用較大的 flash——它一次演練只跑一次，品質比延遲重要。
+  // 評分原本優先用較大的 3.7-flash（D029），現在也改成 flash-lite；
+  // 較大的模型退到備援順位，flash-lite 額度用完時才會用到。
+  //
+  // 萬用比對只收 Gemini 3 以後的版本。Google 的 /models 清單會照樣列出
+  // 已經「不開放給新使用者」的舊模型（2026-09-29 實測 gemini-2.5-flash-lite 回 404），
+  // 名稱上看不出來。原本的 /flash-lite$/ 會把它排在健康的 3.7-flash 前面，
+  // 3.5-flash-lite 一塞車，備援就掉進這個死模型。
+  // -preview 與 -latest 別名也不收：前者不穩定，後者指向哪個版本不確定。
   gemini: {
-    fast: [/^gemini-3\.5-flash-lite$/, /flash-lite$/, /^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, /flash$/],
-    judge: [/^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, /^gemini-3\.5-flash-lite$/, /pro$/, /flash$/],
+    fast: [/^gemini-3\.5-flash-lite$/, GEM_LITE, /^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, GEM_FLASH],
+    judge: [/^gemini-3\.5-flash-lite$/, GEM_LITE, /^gemini-3\.7-flash$/, /^gemini-3\.6-flash$/, GEM_FLASH, /pro$/],
   },
   openai: { fast: [/mini/, /^gpt-/], judge: [/^gpt-5/, /^gpt-4\.1$/, /^gpt-4o$/, /^gpt-/] },
   anthropic: { fast: [/haiku/, /sonnet/], judge: [/sonnet/, /opus/, /haiku/] },
@@ -91,6 +102,8 @@ const RETRYABLE = /\b(429|500|502|503|504)\b|empty response|truncated|fetch fail
 const COOLDOWN_MS = 10 * 60 * 1000;
 // 免費模型的上游流量池通常幾十秒就會空出來，不必冷卻十分鐘
 const UPSTREAM_COOLDOWN_MS = 60 * 1000;
+// 模型對這把金鑰不存在（404）：這種狀態不會自己好，整個頁面期間都別再試
+const GONE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── 共用基底：重試、額度冷卻、模型降級 ─────────────────────────
@@ -207,7 +220,10 @@ class Base {
       chain = chain.filter(m => this._isFree(m));
     }
 
-    let last;
+    // busy：有模型是因為「塞車」而放棄的。全部失敗時優先回報它——
+    // 備援鏈尾端常是已下架的模型（404），若回報最後一個錯誤，
+    // 使用者看到的會是一個跟真正原因無關的訊息。
+    let last, busy = null;
     for (const model of chain) {
       if (Date.now() > deadline) break;                    // 總時限到了就不再試下一個模型
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -231,7 +247,26 @@ class Base {
             if (chain.some(m => this._isFree(m) && m !== model)) break;   // 還有免費的可試
             throw e;
           }
+          // 404：這把金鑰用不了「這個模型」（例如「已不開放給新使用者」）。
+          // 是模型的問題、不是這次請求的問題——跳過它繼續試下一個。
+          // 原本這裡會直接拋出，整條備援鏈在健康的模型之前就中止了。
+          if (/\b404\b/.test(e.message)) {
+            this.cooldown.set(model, Date.now() + GONE_COOLDOWN_MS);
+            console.warn(`[gateway] ${model} 這把金鑰無法使用（404），略過`);
+            break;
+          }
           if (!RETRYABLE.test(e.message)) throw e;          // 非暫時性錯誤直接拋出
+
+          // 503「需求量過高」：Google 那邊塞車。重試一次就好——
+          // 同一個模型再撞通常還是塞，早點換下一個比較快；
+          // 短暫冷卻，下一回合就直接用別的模型，不必每回合都先撞一次。
+          if (/\b503\b/.test(e.message) && /high demand|overloaded|UNAVAILABLE/i.test(e.message) && attempt >= 1) {
+            busy = e;
+            this.cooldown.set(model, Date.now() + UPSTREAM_COOLDOWN_MS);
+            this.onEvent?.({ type: 'busy', model, minutes: UPSTREAM_COOLDOWN_MS / 60000 });
+            console.warn(`[gateway] ${model} 需求量過高，暫時改用下一個模型`);
+            break;
+          }
 
           // 逾時代表這個模型現在很慢或掛住，重試同一個沒有意義，直接換下一個
           if (/timed out|TimeoutError|aborted/i.test(e.message)) {
@@ -256,7 +291,7 @@ class Base {
         }
       }
     }
-    throw last;
+    throw busy || last;
   }
 
   async _fetch(url, init, timeout = 90000) {
@@ -493,7 +528,13 @@ export function friendlyError(msg, provider) {
   const m = String(msg || '');
   const name = PROVIDERS[provider]?.label || '這個服務商';
   if (/API key not valid|invalid[_ ]api[_ ]key|invalid x-api-key|incorrect api key|\b401\b|authentication/i.test(m))
-    return `金鑰無效。請確認你貼上的是完整的金鑰，而且上方選的服務商是「${name}」。`;
+    return `金鑰無效。請確認你貼上的是完整的 ${name} 金鑰（從 AI Studio 複製的那一整串）。`;
+  // 503「需求量過高」：服務商那邊整體塞車。2026-09-29 實際發生時連只回一個字的
+  // 請求都失敗，每個 flash 模型都一樣。原本這裡沒有對應，使用者看到的是通用的
+  // 「剛剛好像卡了一下」，會以為是自己的金鑰或操作有問題。
+  if (/\b503\b|high demand|overloaded|UNAVAILABLE/i.test(m))
+    return `${name} 目前全面塞車（服務商的伺服器忙不過來），這不是你的金鑰或操作的問題。`
+      + '請等幾分鐘再試一次。';
   if (/\b403\b|permission|not authorized|access denied/i.test(m))
     return `這把金鑰沒有使用權限。請到${name}後台確認金鑰狀態，或確認帳號是否已啟用付費。`;
   // 402 是「沒錢」，跟 429「用太快」完全不同，給的建議也不同
