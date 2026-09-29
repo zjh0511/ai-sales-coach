@@ -19,69 +19,13 @@ setInterval(() => {
 
 const newId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-// ── Session 續命 ────────────────────────────────────────────────
-// 原本 session 只存在記憶體 Map 裡。手機切到別的 App、Safari 為了省記憶體
-// 回收分頁、或使用者不小心重新整理，練到一半的演練就整個消失，
-// 只會看到「這次練習的連線已經逾時，請重新開始」。
-// 對訓練工具來說，這種挫折足以讓人不想再練——所以改成同步寫進 sessionStorage。
-// 用 sessionStorage 而非 localStorage：關掉分頁就該結束，不必留到下次。
-const STORE_KEY = 'aicoach.session';
-const store = typeof sessionStorage !== 'undefined' ? sessionStorage : null;
-
-// revealed 是 Set，JSON 無法直接表示
-const pack = s => JSON.stringify({ ...s, revealed: [...s.revealed] });
-const unpack = j => ({ ...j, revealed: new Set(j.revealed || []) });
-
-function persist(s) {
-  if (!store) return;
-  try { store.setItem(STORE_KEY, pack(s)); } catch { /* 容量滿或隱私模式，忽略 */ }
-}
-
-function forget(id) {
-  if (!store) return;
-  try {
-    const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
-    if (!j || j.id === id) store.removeItem(STORE_KEY);
-  } catch { store.removeItem(STORE_KEY); }
-}
-
+// Session 只存在記憶體裡。
+// （原本另外同步寫進 sessionStorage，為的是「接回上次中斷的演練」；
+//   使用者測試後認為用不到，連同保存機制一起移除——見 D039。）
 export function getSession(id) {
-  let s = sessions.get(id);
-  if (!s && store) {                       // 分頁被回收後重新載入 → 從儲存體救回來
-    try {
-      const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
-      if (j && j.id === id && Date.now() - j.touched < SESSION_TTL) {
-        s = unpack(j);
-        sessions.set(id, s);
-      }
-    } catch { /* 壞掉就當作沒有 */ }
-  }
+  const s = sessions.get(id);
   if (s) s.touched = Date.now();
   return s;
-}
-
-// 給 UI 用：有沒有中斷的演練可以接回去？
-export function pendingSession() {
-  if (!store) return null;
-  try {
-    const j = JSON.parse(store.getItem(STORE_KEY) || 'null');
-    if (!j || Date.now() - j.touched > SESSION_TTL) return null;
-    // ROLEPLAY：演練中被打斷，可以接著練。
-    // COMPLETED／EVALUATING：對話已結束但評分沒完成（模型逾時、額度用完、
-    // 評分途中關掉 App），逐字稿都還在，只差重新評分。
-    const needsFeedback = j.state === 'COMPLETED' || j.state === 'EVALUATING';
-    if (j.state !== 'ROLEPLAY' && !needsFeedback) return null;
-    const turns = (j.history || []).filter(h => h.speaker === 'user').length;
-    if (!turns) return null;                          // 一句都還沒說，重新開始更乾淨
-    return {
-      sessionId: j.id, mode: j.mode, turns, needsFeedback,
-      name: j.persona?.name, summary: j.persona?.public_summary,
-      voice: j.persona?.voice_hint || { rate: 1, pitch: 1 },
-      gender: j.persona?.gender,
-      difficultyLabel: P.difficultyOf(j.difficulty).label,
-      transcript: (j.history || []).map(h => ({ speaker: h.speaker, text: h.text })),
-    };
-  } catch { return null; }
 }
 
 // ── 建立 Session：Persona + Scenario + Demo ─────────────────────
@@ -139,7 +83,6 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
     history: [], violations: [], revealed: new Set(),
     guidance: 0, stuck: 0, startedAt: null, touched: Date.now(), lastUser: '', latency: [],
   });
-  persist(sessions.get(id));
 
   return {
     sessionId: id, mode, context, contextLabel: P.CONTEXTS[context].label,
@@ -161,7 +104,6 @@ export function beginRoleplay(s) {
     s.state = 'ROLEPLAY';
     s.startedAt = Date.now();
     s.history.push({ speaker: 'customer', text: s.persona.opening_line, at: Date.now() });
-    persist(s);
   }
   return { opening: s.persona.opening_line };
 }
@@ -186,7 +128,6 @@ export async function handleTurn(gw, s, userText) {
   if (c.level === 'high') {
     const msg = interventionMessage(c.hits);
     s.history.push({ speaker: 'system', text: msg, at: Date.now() });
-    persist(s);
     return { type: 'compliance', text: msg, ended: false, trust: s.trust };
   }
 
@@ -236,9 +177,6 @@ export async function handleTurn(gw, s, userText) {
   const ended = s.canEnd
     && (s.guidance >= s.maxGuidance || (data.end === true && userTurns >= MIN_TURNS));
   if (ended) s.state = 'COMPLETED';
-  // 通話結束了但還沒評分，所以仍要留著：評分若失敗，逐字稿不能跟著消失。
-  // 只有評分成功（dropSession）才真正刪除。
-  persist(s);
 
   return {
     type: 'customer', text: say, ended, trust: s.trust,
@@ -255,12 +193,10 @@ export async function evaluate(gw, s) {
   // 使用者按下「結束」或客戶掛電話，對話就不會再繼續了——
   // 評分失敗時退回 COMPLETED，而不是 ROLEPLAY。
   s.state = 'EVALUATING';
-  persist(s);
   try {
     return await evaluateInner(gw, s);
   } catch (e) {
     s.state = 'COMPLETED';
-    persist(s);
     throw e;
   }
 }
@@ -321,5 +257,5 @@ async function evaluateInner(gw, s) {
   };
 }
 
-export function dropSession(id) { sessions.delete(id); forget(id); }
+export function dropSession(id) { sessions.delete(id); }
 export const sessionCount = () => sessions.size;

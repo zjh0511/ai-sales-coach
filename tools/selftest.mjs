@@ -168,11 +168,9 @@ if (run(1)) {
   console.log('');
   console.log('=== 1h. 評分失敗不弄丟演練 ===');
   {
-    const mem = new Map();
-    globalThis.sessionStorage = {
-      getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
-    };
-    const SE = await import('../docs/engine/session.js?a1');     // 新的實例才讀得到上面這個 sessionStorage
+    // 「接回上次中斷的演練」已移除（D039），session 只存在記憶體裡。
+    // 這裡驗證仍保留的部分：評分失敗時逐字稿還在，原地「重新評分」可以成功。
+    const SE = await import('../docs/engine/session.js?a1');
     const persona = {
       name: '陳先生', public_summary: '45 歲國小老師', opening_line: '喂，你好？',
       voice_hint: { rate: 1, pitch: 1 }, trust: 70, personality: '溫和', communication_style: '客氣',
@@ -203,17 +201,14 @@ if (run(1)) {
     ok(threw, '評分失敗時確實往外拋錯（讓畫面知道要顯示重試）');
     ok(s.state === 'COMPLETED', '失敗後狀態退回 COMPLETED（對話已結束、待評分）', s.state);
     ok(!!SE.getSession(pub.sessionId), '失敗後 session 仍在');
-    const p = SE.pendingSession();
-    ok(p?.needsFeedback === true, '首頁看得到「完成上次演練的評分」', JSON.stringify(p && { needsFeedback: p.needsFeedback }));
-    ok(p?.turns === 2, '逐字稿完整保留（2 個回合）', String(p?.turns));
+    ok(SE.getSession(pub.sessionId).history.filter(h => h.speaker === 'user').length === 2,
+      '逐字稿完整保留（2 個回合）');
 
     evalFails = false;
     const fb = await SE.evaluate(gw, s);
     ok(!!fb?.scores, '重新評分成功');
     ok(s.state === 'FEEDBACK_READY', '成功後狀態為 FEEDBACK_READY');
     SE.dropSession(s.id);
-    ok(SE.pendingSession() === null, '評分成功並清掉之後，首頁不再提示');
-    delete globalThis.sessionStorage;
   }
 
   // ── A2：帳號被停用或刪除時要真的登出；沒網路時不能登出 ─────────

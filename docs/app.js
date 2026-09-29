@@ -30,7 +30,7 @@ function show(name) {
     // 強制登入的把關點。帳號在使用途中失效（管理者停用、token 被撤銷）時，
     // 不在演練中硬切畫面，而是在下一次回到首頁時擋下來。
     if (acct.configured() && !acct.user()) { initAuth(); return show('auth'); }
-    updateAccount(); checkResume(); updateWho();
+    updateAccount(); updateWho();
   }
 }
 
@@ -179,57 +179,6 @@ async function updateAccount() {
 
 $('#home-logout').onclick = () => {
   if (confirm('登出後需要重新輸入 API 金鑰，訓練紀錄不會被刪除。確定登出？')) logout();
-};
-
-// ── 接回中斷的演練 ──────────────────────────────────────────
-// 手機切到別的 App、Safari 回收分頁、或不小心重新整理，
-// 都會讓練到一半的演練消失。能接回去比「請重新開始」友善得多。
-async function checkResume() {
-  const btn = $('#home-resume');
-  btn.hidden = true;
-  if (S.sessionId) return;                      // 手上已經有進行中的演練
-  try {
-    const { pending } = await api('/session/pending');
-    if (!pending) return;
-    S.pending = pending;
-    $('#resume-info').textContent = pending.needsFeedback
-      ? `${pending.name}　·　${pending.turns} 個回合　·　上次還沒完成評分，點這裡重新評分`
-      : `${pending.name}　·　${pending.difficultyLabel}　·　已進行 ${pending.turns} 個回合`;
-    $('#home-resume b').textContent = pending.needsFeedback ? '完成上次演練的評分' : '接回上次中斷的演練';
-    btn.hidden = false;
-  } catch { /* 沒有就算了，不用打擾使用者 */ }
-}
-
-$('#home-resume').onclick = async () => {
-  const p = S.pending;
-  if (!p) return;
-  // 對話已經結束、只差評分（上次評分失敗或評分途中關掉 App）
-  if (p.needsFeedback) {
-    S.fn = p.mode; S.sessionId = p.sessionId; S.ended = true;
-    S.persona = { name: p.name, summary: p.summary, voice: p.voice };
-    return finish();
-  }
-  voice.unlock();                               // 必須在使用者手勢中
-  voice.resetStats();
-  S.fn = p.mode;
-  S.sessionId = p.sessionId;
-  S.persona = { name: p.name, summary: p.summary, voice: p.voice, gender: p.gender };
-  S.ended = false;
-  try {
-    const d = await api('/session/resume', { sessionId: p.sessionId });
-    $('#p-log').innerHTML = '';
-    $('#p-name').textContent = p.name;
-    $('#p-found').hidden = S.fn !== 'needs';
-    if (S.fn === 'needs') $('#p-found').textContent = `已挖到 ${d.revealed}／${d.totalHidden} 項`;
-    for (const t of d.transcript) push('#p-log', t.speaker, t.text);
-    show('play');
-    setStatus('接回上次的進度，繼續說吧');
-    nextTurn(300);
-  } catch (e) {
-    S.sessionId = null;
-    toast(e.message);
-    checkResume();
-  }
 };
 
 // ── 模型設定 ────────────────────────────────────────────────
@@ -723,16 +672,7 @@ async function finish() {
     fb.voiceStats = voice.stats();          // 評分一失敗整場逐字稿就跟著消失
     renderFeedback(fb); saveHistory(fb); show('fb');
   } catch (e) {
-    if (e.auth) {
-      // 金鑰失效。不能呼叫 logout()——它會 abort() 把逐字稿一起丟掉。
-      // 只放掉畫面上的指標、清掉金鑰；session 仍留在引擎與 sessionStorage，
-      // 重新登入後首頁會出現「完成上次演練的評分」。
-      S.sessionId = null;
-      localStorage.removeItem(AKEY_KEY);
-      $('#lg-msg').className = 'note err';
-      $('#lg-msg').textContent = e.message + '。重新登入後，首頁可以完成上次演練的評分。';
-      return show('login');
-    }
+    if (e.auth) return logout(e.message);          // 金鑰失效：和其他畫面一樣回登入頁
     // 逐字稿還在引擎裡（也存在 sessionStorage），留在這個畫面讓使用者重試。
     // 最常見的原因是免費額度一時用完（Groq 每分鐘 8000 tokens、Gemini 429），
     // 等一下再按通常就好了。
@@ -1281,7 +1221,7 @@ function handleShortcut() {
 // ── 啟動 ────────────────────────────────────────────────────
 $('#btn-welcome').onclick = () => { localStorage.setItem('aicoach.seen', '1'); show('home'); };
 // 離開頁面時只釋放麥克風與語音，**不要**結束演練——
-// 手機切換 App 也會觸發 pagehide，若在這裡 abort 就等於自己把續命功能抵銷掉。
+// 切換 App 也會觸發 pagehide——只停掉麥克風與朗讀，不結束演練，回來還能繼續講。
 window.addEventListener('pagehide', () => voice.reset());
 $('#home-acct').hidden = true; $('#home-logout').hidden = true;
 
