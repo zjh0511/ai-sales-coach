@@ -155,6 +155,10 @@ label.inline input{width:auto}
 .or-sep::before,.or-sep::after{content:"";flex:1;height:1px;background:var(--line)}
 #m-filter{margin-bottom:10px}
 a{color:var(--acc)}
+.card.getkey{margin-top:18px}
+.card.getkey h4{color:var(--fg);margin:0}
+.card.getkey .note{margin:2px 0 4px}
+.btn.plain-link{display:block;text-align:center;text-decoration:none;margin-top:10px}
 .btn.guide-link{display:block;text-align:center;text-decoration:none;margin-top:10px;
   border-color:var(--acc);color:var(--acc)}
 #install-card h4{margin-bottom:4px}

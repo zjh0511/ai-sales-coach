@@ -92,8 +92,13 @@
     <input id="lg-key" type="password" inputmode="text" autocomplete="off"
            autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在此貼上金鑰">
     <label class="inline"><input type="checkbox" id="lg-show"> 顯示金鑰</label>
-    <p class="note">還沒有金鑰？<a id="lg-link" href="#" target="_blank" rel="noopener">前往 Google AI Studio 申請</a>（免費，不需要信用卡）</p>
-    <a class="btn guide-link" id="lg-guide" href="guide.html">📖 Google AI Studio，免費 API 申請教學</a>
+    <!-- 還沒有金鑰的新同事：申請與教學收在同一張卡片，一看就知道是給誰的 -->
+    <div class="card getkey">
+      <h4>還沒有金鑰？</h4>
+      <p class="note">免費，不需要信用卡，大約 3 分鐘</p>
+      <a class="btn guide-link" id="lg-link" href="#" target="_blank" rel="noopener">🔑 前往申請金鑰 ↗</a>
+      <a class="btn plain-link" id="lg-guide" href="guide.html">📖 看申請教學</a>
+    </div>
 
     <div class="card sm">
       <p class="note" style="margin:0">
