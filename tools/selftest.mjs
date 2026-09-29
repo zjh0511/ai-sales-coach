@@ -409,6 +409,122 @@ if (run(1)) {
     walk(path.join(DIR, 'tools'));
     ok(!bad.length, '除了 tab 以外沒有任何控制字元', bad.slice(0, 5).join('、'));
   }
+  // ── 真人語音（Gemini TTS）與內建朗讀的退路 ────────────────────
+  // 雲端語音的每一種失敗都必須退回內建朗讀、演練不中斷；
+  // 但使用者自己插話打斷的，不能再用內建朗讀把同一句念一次。
+  console.log('');
+  console.log('=== 1m. 真人語音與退路 ===');
+  {
+    // 串流解析：事件用 \r\n 分隔、內容是 base64 的 16-bit PCM（實測格式）
+    const TTS = await import('../docs/engine/tts.js');
+    const pcmB64 = arr => Buffer.from(new Int16Array(arr).buffer).toString('base64');
+    const CRLF = String.fromCharCode(13, 10);
+    const sse = events => new Response(new ReadableStream({ start(c) {
+      for (const e of events) c.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(e) + CRLF + CRLF));
+      c.close();
+    } }), { status: 200 });
+    const chunkEv = arr => ({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/l16; rate=24000; channels=1', data: pcmB64(arr) } }] } }] });
+    const realFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => sse([chunkEv([1, -2, 32767]), chunkEv([-32768, 5])]);
+      const got = [];
+      for await (const c of TTS.streamSpeech('k', '你好', 'Charon')) got.push(c);
+      ok(got.length === 2 && got[0].rate === 24000, '串流解析：\\r\\n 分隔的事件都讀得到', `${got.length} 段`);
+      ok(got[0].pcm[1] === -2 && got[0].pcm[2] === 32767 && got[1].pcm[0] === -32768, 'PCM 數值正確（含正負極值）');
+
+      globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: 'quota' } }), { status: 429 });
+      let m1 = ''; try { for await (const _ of TTS.streamSpeech('k', 'x', 'Charon')) { /* */ } } catch (e) { m1 = e.message; }
+      ok(/429/.test(m1), 'HTTP 錯誤會帶狀態碼往外拋', m1);
+
+      globalThis.fetch = async () => sse([{ error: { code: 503, message: 'high demand' } }]);
+      let m2 = ''; try { for await (const _ of TTS.streamSpeech('k', 'x', 'Charon')) { /* */ } } catch (e) { m2 = e.message; }
+      ok(/503/.test(m2), '串流中途回報的錯誤也會拋出', m2);
+      ok(TTS.voiceFor('女') === 'Aoede' && TTS.voiceFor('男') === 'Charon' && TTS.voiceFor(undefined) === 'Charon',
+        '男客戶 Charon、女客戶 Aoede，沒給性別用男聲');
+    } finally { globalThis.fetch = realFetch; }
+
+    // 假的播放環境
+    const said = [];
+    const synth = { speaking: false, pending: false, paused: false,
+      speak(u) { said.push({ text: u.text, pitch: u.pitch }); setTimeout(() => { u.onstart?.(); setTimeout(() => u.onend?.(), 20); }, 5); },
+      cancel() {}, resume() {}, getVoices: () => [] };
+    class FakeCtx {
+      constructor() { this.state = 'running'; this.t0 = performance.now(); this.destination = {}; this.at = []; FakeCtx.last = this; }
+      get currentTime() { return (performance.now() - this.t0) / 1000; }
+      resume() { this.state = 'running'; return Promise.resolve(); }
+      createBuffer(ch, len, rate) { return { duration: len / rate, copyToChannel() {} }; }
+      createBufferSource() { const ctx = this; return { connect() {}, start(t) { ctx.at.push({ t, d: this.buffer.duration }); }, stop() { this.stopped = true; } }; }
+    }
+    globalThis.window = { speechSynthesis: synth, SpeechRecognition: class {} };
+    globalThis.speechSynthesis = synth;
+    globalThis.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } };
+    globalThis.AudioContext = FakeCtx;
+    const session = { type: 'auto', history: [] };
+    Object.defineProperty(globalThis.navigator, 'audioSession', { value: session, configurable: true });
+    const setType = Object.getOwnPropertyDescriptor(session, 'type');
+    let typeVal = 'auto';
+    Object.defineProperty(session, 'type', { get: () => typeVal, set: v => { typeVal = v; session.history.push(v); }, configurable: true });
+
+    const V = await import('../docs/voice.js?tts');
+    Object.assign(V.TIMING, { cloudFirst: 150, jitter: 0.1, poll: 20, start: 200 });
+    const v = new V.Voice({ onState() {} });
+    const states = []; v.onState = s => states.push(s);
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const pcm = n => new Int16Array(n).fill(100);
+    let streamCalls = 0;
+    const reset = () => { said.length = 0; states.length = 0; streamCalls = 0; session.history.length = 0; };
+
+    // 1) 雲端成功：不會再用內建朗讀；每段聲音前後剛好接上
+    reset();
+    v.cloud = { async *stream() { streamCalls++; for (let i = 0; i < 8; i++) { await wait(5); yield { pcm: pcm(1200), rate: 24000 }; } } };
+    await v.speak('喔，林大哥介紹的喔？');
+    const at = FakeCtx.last?.at || [];          // 沒有雲端播放時要回報失敗，而不是崩潰
+    const gaps = at.slice(1).map((x, i) => Math.abs(x.t - (at[i].t + at[i].d)));
+    ok(streamCalls === 1 && said.length === 0, '真人語音成功時不會再用內建朗讀念一次');
+    ok(at.length >= 2 && Math.max(...gaps) < 0.002, '每段聲音前後剛好接上，沒有縫', `${at.length} 段，最大間隙 ${(Math.max(...gaps) * 1000).toFixed(2)}ms`);
+    ok(session.history[0] === 'playback' && session.history.at(-1) === 'auto',
+      'iOS 播放期間切成媒體播放（靜音開關打開也聽得到），播完切回', session.history.join(' → '));
+
+    // 2) 還沒出聲就失敗：退回內建朗讀，並告訴畫面
+    reset();
+    v.cloud = { async *stream() { streamCalls++; throw new Error('tts 503 high demand'); } };
+    await v.speak('好的');
+    ok(said.length === 1 && states.includes('tts-fallback'), '真人語音失敗：退回內建朗讀，演練不中斷');
+
+    // 3) 額度用完：之後幾分鐘直接用內建，不必每句先撞一次
+    reset(); v.cloudOffUntil = 0;
+    v.cloud = { async *stream() { streamCalls++; throw new Error('tts 429 quota'); } };
+    await v.speak('一');
+    await v.speak('二');
+    ok(streamCalls === 1 && said.length === 2, '額度用完：之後直接用內建朗讀，不再每句多等', `雲端呼叫 ${streamCalls} 次`);
+
+    // 4) 第一段聲音遲遲不來：時間到就放棄，改用內建
+    reset(); v.cloudOffUntil = 0; v.cloudFails = 0;
+    v.cloud = { async *stream(t, g, signal) { streamCalls++; await new Promise((_, rej) => signal.addEventListener('abort', () => rej(new Error('aborted')))); } };
+    const t0 = Date.now();
+    await v.speak('測試');
+    ok(said.length === 1 && Date.now() - t0 < 600, '第一段聲音太久沒來：放棄並改用內建朗讀', `${Date.now() - t0}ms`);
+
+    // 5) 使用者插話打斷：不能再用內建朗讀把同一句念一次
+    reset(); v.cloudOffUntil = 0; v.cloudFails = 0;
+    v.cloud = { async *stream() { for (let i = 0; i < 40; i++) { await wait(10); yield { pcm: pcm(2400), rate: 24000 }; } } };
+    const p = v.speak('這是一段很長的回覆');
+    await wait(80);
+    v.stopSpeaking();
+    await p;
+    ok(said.length === 0 && v.state === 'idle', '使用者插話打斷：停止播放，而且不會改用內建朗讀重念');
+
+    // 6) 內建朗讀本身：逗號不切段、音高固定
+    reset(); v.cloud = null;
+    // 人設會給 0.8～1.2 的音高——給一個偏離的值，確認真的被固定回 1
+    await v.speak('嗯，我知道，不過我最近比較忙。你下次再打來好了！', { pitch: 1.2, rate: 1 });
+    ok(said.length === 2 && said[0].text === '嗯，我知道，不過我最近比較忙。', '內建朗讀只在句尾切段，逗號保留在同一句裡', said.map(s => s.text).join(' | '));
+    ok(said.every(s => s.pitch === 1), '人設給了 1.2 的音高，內建朗讀仍固定為 1（改音高會更像機器）', said.map(s => s.pitch).join(','));
+
+    await wait(300);          // 內建朗讀排了 250ms 後的「卡住保險絲」，等它跑完才能拆掉假環境
+    delete globalThis.window; delete globalThis.speechSynthesis; delete globalThis.SpeechSynthesisUtterance;
+    delete globalThis.AudioContext; delete globalThis.navigator.audioSession;
+  }
 }
 
 const models = await gw.init();

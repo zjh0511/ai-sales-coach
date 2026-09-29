@@ -77,6 +77,7 @@ export function pendingSession() {
       sessionId: j.id, mode: j.mode, turns, needsFeedback,
       name: j.persona?.name, summary: j.persona?.public_summary,
       voice: j.persona?.voice_hint || { rate: 1, pitch: 1 },
+      gender: j.persona?.gender,
       difficultyLabel: P.difficultyOf(j.difficulty).label,
       transcript: (j.history || []).map(h => ({ speaker: h.speaker, text: h.text })),
     };
@@ -145,6 +146,7 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
     persona: {                       // 只回傳 Public State，隱藏需求不下發到 Client
       name: p.name, summary: p.public_summary,
       voice: p.voice_hint || { rate: 1, pitch: 1 },
+      gender,                        // 雲端語音用它選聲線（男 Charon／女 Aoede）
       difficulty, difficultyLabel: D.label,
     },
     scenario: p.scenario,

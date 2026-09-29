@@ -23,6 +23,8 @@ export const TIMING = {
   end: 4000,      // 拿到最終結果後，這麼久還沒觸發 onend → 強制收尾
   start: 10000,   // 朗讀這麼久都沒開始播放 → 放行，別讓流程卡死
   poll: 300,      // 輪詢朗讀引擎狀態的間隔
+  cloudFirst: 4000, // 雲端語音這麼久還沒有第一段聲音 → 放棄，改用內建朗讀
+  jitter: 0.25,   // 雲端語音先累積這麼多秒再開始播，避免開頭因網路抖動斷音
 };
 
 export const supported = {
@@ -64,6 +66,11 @@ export class Voice {
     // 語音對練裡使用者感知的延遲是「對方何時開始說話」，不是「何時說完」。
     this.lastFinalAt = 0;
     this.latencies = [];
+    // 雲端語音（Gemini TTS）。由 app.js 注入 { stream(text, gender, signal) }，
+    // 這裡不碰金鑰——Voice Engine 保持與服務商無關，可以整檔替換。
+    this.cloud = null;
+    this.cloudOffUntil = 0;          // 失敗冷卻到這個時間點前，直接用內建朗讀
+    this.speakTok = 0;               // 每次朗讀／打斷就 +1，用來分辨「被打斷」與「失敗」
     if (supported.tts) {
       const load = () => { this.voice = pickVoice(); };
       load(); speechSynthesis.onvoiceschanged = load;
@@ -74,6 +81,9 @@ export class Voice {
 
   // 必須在使用者手勢中呼叫一次（iOS 音訊解鎖）
   unlock() {
+    // 雲端語音用 Web Audio 播放。iOS 規定 AudioContext 必須在使用者手勢中啟動，
+    // 而且接電話、切 App 之後會被暫停——所以每次手勢都要再叫醒一次，不只第一次。
+    try { const c = this._ctx(); if (c && c.state !== 'running') c.resume(); } catch { /* ignore */ }
     if (this.unlocked || !supported.tts) return;
     const u = new SpeechSynthesisUtterance(' ');
     u.volume = 0; speechSynthesis.speak(u);
@@ -166,20 +176,159 @@ export class Voice {
     if (this.state === 'listening') this._set('idle');
   }
 
-  speak(text, hint = {}) {
+  // 朗讀。有設定雲端語音（Gemini）就先用它；任何原因失敗——沒有金鑰、額度用完、
+  // 網路不穩、服務商塞車、第一段聲音遲遲不來——都退回手機內建朗讀，演練不中斷。
+  // 但使用者自己插話打斷的，不算失敗，不能再用內建朗讀把同一句念一次。
+  async speak(text, hint = {}) {
+    if (!text) return;
+    this.stopSpeaking();
+    const tok = this.speakTok;
+    if (this._cloudUsable()) {
+      const played = await this._speakCloud(text, hint, tok);
+      if (played || tok !== this.speakTok) return;
+    }
+    if (tok !== this.speakTok) return;
+    await this._speakDevice(text, hint);
+  }
+
+  // ── 雲端語音（Gemini TTS）──────────────────────────────────
+  _cloudUsable() {
+    return !!this.cloud && Date.now() > this.cloudOffUntil && !!(this._ctx());
+  }
+
+  _ctx() {
+    if (this.actx) return this.actx;
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AC) return null;
+    try { this.actx = new AC(); } catch { return null; }
+    return this.actx;
+  }
+
+  // 雲端語音失敗時要冷卻多久。每回合都先撞一次再退回，會讓每句話都多等好幾秒。
+  _cloudFailed(e) {
+    const m = String(e?.message || e);
+    this.cloudFails = (this.cloudFails || 0) + 1;
+    const off = /\b429\b|quota|RESOURCE_EXHAUSTED/i.test(m) ? 10 * 60 * 1000   // 額度用完
+      : /\b40[34]\b/.test(m) ? 24 * 60 * 60 * 1000                               // 這把金鑰不能用這個模型
+      : this.cloudFails >= 2 ? 3 * 60 * 1000                                     // 連續失敗（塞車、網路）
+      : 0;
+    if (off) this.cloudOffUntil = Date.now() + off;
+    this.onState?.('tts-fallback');
+  }
+
+  // 回傳 true：已經播出聲音（或被使用者打斷）；false：一個字都沒播，呼叫端該退回內建朗讀。
+  async _speakCloud(text, hint, tok) {
+    const ctx = this._ctx();
+    if (!ctx) return false;
+    if (ctx.state !== 'running') { try { await ctx.resume(); } catch { /* ignore */ } }
+    if (ctx.state !== 'running') return false;       // 沒在使用者手勢中解鎖過，iOS 不給播
+
+    // iOS 用 Web Audio 播放的聲音，在「靜音開關」打開時會被消音（內建朗讀不會）。
+    // 播放期間把音訊通道切成「媒體播放」，播完再切回自動，免得影響之後的收音。
+    // 需要 Safari 16.4 以上；不支援的環境這兩行什麼都不做。
+    const session = globalThis.navigator?.audioSession;
+    const prevType = session?.type;
+    try { if (session) session.type = 'playback'; } catch { /* ignore */ }
+
+    const ac = new AbortController();
+    this.cloudAbort = ac;
+    const sources = [];
+    this.cloudSources = sources;
+    this._set('speaking');
+
+    let next = 0, started = false, pending = [], pendingLen = 0, rate = 24000;
+    // 第一段聲音太久沒來就放棄，改用內建朗讀——使用者寧可聽機器聲，也不要乾等
+    const firstTimer = setTimeout(() => { if (!started) ac.abort(); }, TIMING.cloudFirst);
+
+    const schedule = f32 => {
+      const b = ctx.createBuffer(1, f32.length, rate);
+      b.copyToChannel(f32, 0);
+      const s = ctx.createBufferSource();
+      s.buffer = b;
+      s.connect(ctx.destination);
+      const at = Math.max(ctx.currentTime + 0.03, next);
+      s.start(at);
+      next = at + b.duration;
+      sources.push(s);
+      if (!started) {
+        started = true;
+        clearTimeout(firstTimer);
+        if (this.lastFinalAt) {          // 「客戶開口」的那一刻，和內建朗讀用同一個量法
+          this.latencies.push(Math.round(performance.now() - this.lastFinalAt + (at - ctx.currentTime) * 1000));
+          this.lastFinalAt = 0;
+        }
+      }
+    };
+    const flush = () => {
+      if (!pendingLen) return;
+      const all = new Float32Array(pendingLen);
+      let o = 0;
+      for (const p of pending) { all.set(p, o); o += p.length; }
+      pending = []; pendingLen = 0;
+      schedule(all);
+    };
+    const restore = () => { try { if (session) session.type = prevType || 'auto'; } catch { /* ignore */ } };
+
+    try {
+      for await (const chunk of this.cloud.stream(text, hint.gender, ac.signal)) {
+        if (tok !== this.speakTok) break;
+        rate = chunk.rate;
+        const f32 = new Float32Array(chunk.pcm.length);
+        for (let i = 0; i < f32.length; i++) f32[i] = chunk.pcm[i] / 32768;
+        // 串流每段只有約 70ms。先累積一小段再開始播，避免一開頭就因網路抖動而斷音；
+        // 開始之後就一段接一段排進時間軸，前後剛好接上，不會有縫。
+        if (!started) {
+          pending.push(f32); pendingLen += f32.length;
+          if (pendingLen / rate >= TIMING.jitter) flush();
+        } else {
+          schedule(f32);
+        }
+      }
+      if (tok === this.speakTok) flush();       // 很短的句子：串流結束時還沒湊滿緩衝
+    } catch (e) {
+      clearTimeout(firstTimer);
+      if (tok !== this.speakTok) { restore(); return true; }      // 使用者打斷，不是失敗
+      if (!started) { this._stopSources(); restore(); this._cloudFailed(e); return false; }
+      // 播到一半才斷：已經排進時間軸的讓它播完，客戶的話也已經顯示在畫面上
+    }
+    clearTimeout(firstTimer);
+    if (tok !== this.speakTok) { restore(); return true; }
+    if (!started) { restore(); this._cloudFailed(new Error('tts no audio')); return false; }
+
+    this.cloudFails = 0;
+    // 等最後一段播完。用時間軸算，不依賴 onended（被 stop() 時各瀏覽器行為不一）
+    await new Promise(res => {
+      this.cloudDone = res;
+      this.cloudTimer = setTimeout(res, Math.max(0, next - ctx.currentTime) * 1000 + 120);
+    });
+    this.cloudDone = null;
+    restore();
+    if (tok === this.speakTok) this._set('idle');
+    return true;
+  }
+
+  _stopSources() {
+    for (const s of this.cloudSources || []) { try { s.stop(); } catch { /* 已經播完 */ } }
+    this.cloudSources = [];
+  }
+
+  // ── 手機內建朗讀 ────────────────────────────────────────────
+  _speakDevice(text, hint) {
     return new Promise(resolve => {
-      if (!supported.tts || !text) return resolve();
+      if (!supported.tts) return resolve();
       speechSynthesis.cancel();
       // 朗讀引擎有時會卡在「暫停」狀態（iOS／Chrome 都見過），先解除
       try { speechSynthesis.resume(); } catch { /* ignore */ }
-      // 依標點切句 → 逐句送出，降低第一個字發聲的延遲
-      const parts = text.split(/(?<=[。！？!?，,；;])/).filter(s => s.trim());
+      // 只在句尾切段，不在逗號切。原本在逗號也切，每一段都被當成完整句子念——
+      // 每個逗號都變成句尾降調＋停頓，聽起來像在唸清單，是機械感的主因之一。
+      const parts = text.split(/(?<=[。！？!?])/).filter(s => s.trim());
       let left = parts.length, fin = false, started = false, idle = 0;
       this._set('speaking');
       const finish = () => {
         if (fin) return; fin = true;
         clearTimeout(guard); clearTimeout(startGuard); clearInterval(poll);
-        this._set('idle'); resolve();
+        if (this.state === 'speaking') this._set('idle');
+        resolve();
       };
       // 主要判斷：輪詢朗讀引擎的實際狀態。部分手機播完不觸發 onend，
       // 原本只能等下面那個保險絲——50 字的回覆要白等 16 秒才會開麥克風。
@@ -194,13 +343,16 @@ export class Voice {
       const startGuard = setTimeout(() => { if (!started) finish(); }, TIMING.start);
       // 最後一道保險絲：整段的最長時間
       const guard = setTimeout(finish, 3000 + text.length * 260);
+      this.deviceFinish = finish;
 
       parts.forEach((p, i) => {
         const u = new SpeechSynthesisUtterance(p);
         u.lang = 'zh-TW';
         if (this.voice) u.voice = this.voice;
-        u.rate = hint.rate ?? 1.0;
-        u.pitch = hint.pitch ?? 1.0;
+        // 語速只做小幅調整；音高固定。瀏覽器改音高是粗糙的訊號處理，
+        // 偏離 1.0 就更像機器（原本人設會隨機給 0.8～1.2）。
+        u.rate = Math.min(1.15, Math.max(0.9, Number(hint.rate) || 1));
+        u.pitch = 1;
         // 只在第一句真正開始播放時記一次——這才是使用者感知到的「客戶開口」
         u.onstart = () => {
           idle = 0;
@@ -222,7 +374,12 @@ export class Voice {
   }
 
   stopSpeaking() {
+    this.speakTok = (this.speakTok || 0) + 1;       // 讓進行中的朗讀知道自己被打斷了
+    this.cloudAbort?.abort(); this.cloudAbort = null;
+    this._stopSources();
+    clearTimeout(this.cloudTimer); this.cloudDone?.(); this.cloudDone = null;
     if (supported.tts) speechSynthesis.cancel();
+    this.deviceFinish?.(); this.deviceFinish = null;
     if (this.state === 'speaking') this._set('idle');
   }
 

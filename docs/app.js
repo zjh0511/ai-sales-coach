@@ -1,4 +1,5 @@
 import { Voice, supported, voiceInfo, MIC_AFTER_TTS_MS } from './voice.js';
+import { streamSpeech, voiceFor } from './engine/tts.js';
 import { api, providers, restore, onModelEvent } from './engine/api.js';
 import { startOpenRouter, oauthSupported } from './engine/oauth.js';
 import * as acct from './engine/account.js';
@@ -212,7 +213,7 @@ $('#home-resume').onclick = async () => {
   voice.resetStats();
   S.fn = p.mode;
   S.sessionId = p.sessionId;
-  S.persona = { name: p.name, summary: p.summary, voice: p.voice };
+  S.persona = { name: p.name, summary: p.summary, voice: p.voice, gender: p.gender };
   S.ended = false;
   try {
     const d = await api('/session/resume', { sessionId: p.sessionId });
@@ -577,6 +578,12 @@ const voice = new Voice({
     setStatus('麥克風沒有反應，點一下麥克風再試；也可以直接打字');
   },
   onState: s => {
+    // 真人語音失敗、改用內建朗讀。只提示一次——每句都跳會很煩，
+    // 而之後幾句通常也會走內建（有冷卻），使用者知道原因就好。
+    if (s === 'tts-fallback') {
+      if (!ttsNotice) { ttsNotice = true; toast('真人語音暫時無法使用，先改用手機內建語音', 3500); }
+      return;
+    }
     const m = $('#btn-mic');
     m.classList.toggle('rec', s === 'listening');
     m.classList.toggle('talk', s === 'speaking');
@@ -589,12 +596,25 @@ const voice = new Voice({
   },
 });
 
+// 真人語音（Gemini TTS）：用使用者同一把 Google AI Studio 金鑰。
+// 金鑰每次呼叫時才讀——使用者換金鑰或登出後，不會拿著舊的去呼叫。
+let ttsNotice = false;
+voice.cloud = {
+  stream: (text, gender, signal) => {
+    const { provider, key } = cred();
+    if (provider !== 'gemini' || !key) throw new Error('tts no key');
+    return streamSpeech(key, text, voiceFor(gender), signal);
+  },
+};
+const speakHint = () => ({ ...(S.persona?.voice || {}), gender: S.persona?.gender });
+
 const setStatus = (t, cls = '') => { const n = $('#p-status'); n.textContent = t; n.className = 'status ' + cls; };
 
 // iOS 預設給網頁用的中文語音是壓縮版，聽起來明顯是機器聲。
 // 下載加強版之後音質差距很大，而這件事使用者不會自己知道——所以提示一次。
 const VOICE_HINT_KEY = 'aicoach.voicehint';
 function hintVoiceQuality() {
+  if (voice.cloud) return;                       // 用真人語音時，內建語音的音質就不重要了
   if (localStorage.getItem(VOICE_HINT_KEY)) return;
   const v = voiceInfo();
   if (!v || v.enhanced) return;                 // 已經是加強版就不用囉唆
@@ -621,7 +641,7 @@ $('#btn-start').onclick = async () => {
   try {
     const d = await api('/session/begin', { sessionId: S.sessionId });
     push('#p-log', 'customer', d.opening);
-    await voice.speak(d.opening, S.persona.voice);
+    await voice.speak(d.opening, speakHint());
     nextTurn();
   } catch (e) { toast(e.message); }
 };
@@ -679,7 +699,7 @@ async function submit(text) {
     if (S.fn === 'needs') $('#p-found').textContent = `已挖到 ${d.revealed}／${d.totalHidden} 項`;
     if (d.warn) toast('注意用語：' + d.warn[0], 3600);
     S.busy = false;
-    await voice.speak(d.text, S.persona.voice);
+    await voice.speak(d.text, speakHint());
 
     if (d.ended) { S.ended = true; setStatus('這次談話結束了'); setTimeout(finish, 900); }
     else nextTurn();
