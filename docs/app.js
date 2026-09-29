@@ -378,7 +378,7 @@ $('#btn-go').onclick = async () => {
   if (S.fn === 'pain') {
     busy('正在分析這位客戶可能的痛點…');
     try { renderPain(await api('/analyze/pain', customer)); show('pain'); }
-    catch (e) { if (e.auth) return; toast(e.message); show('intake'); }
+    catch (e) { if (e.auth) return logout(e.message); toast(e.message); show('intake'); }
     return;
   }
 
@@ -399,8 +399,9 @@ $('#btn-go').onclick = async () => {
     $('#b-q').textContent = d.demo?.key_question || '';
     $('#b-oc').textContent = '客戶：' + (d.demo?.objection_handling?.customer || '');
     $('#b-oy').textContent = '你：' + (d.demo?.objection_handling?.you || '');
+    $('#b-learn').hidden = S.fn !== 'product' || !S.doc;
     show('brief');
-  } catch (e) { if (e.auth) return; toast(e.message); show('intake'); }
+  } catch (e) { if (e.auth) return logout(e.message); toast(e.message); show('intake'); }
 };
 
 // ── 功能一：痛點分析結果 ────────────────────────────────────
@@ -475,9 +476,155 @@ async function renderDocs() {
 
 function chooseDoc(d) {
   S.doc = { id: d.id, title: d.title || d.name };
-  if (S.docPick === 'product') { S.docPick = null; openIntake('product'); }
+  if (S.docPick === 'product') { S.docPick = null; openLearn('pick'); }
   else { S.docPick = null; S.claimHistory = []; $('#c-title').textContent = S.doc.title; renderClaim(); show('claim'); }
 }
+
+// ── 商品重點教學 ────────────────────────────────────────────
+// 每份教材第一次選用時一定會出現；看過之後按鈕變成「跳過，直接演練」，
+// 老手不用每次被擋。演練前準備頁可以「回看」（review），看完回到準備頁，演練不中斷。
+let learnFrom = 'pick', learnView = null;
+
+async function openLearn(from) {
+  learnFrom = from;
+  busy('正在載入商品重點…');
+  try { learnView = await api('/doc/lesson', { id: S.doc.id }); }
+  catch (e) { if (e.auth) return logout(e.message); toast(e.message); return show(from === 'review' ? 'brief' : 'docs'); }
+  $('#l-go').textContent = from === 'review' ? '回到演練前準備'
+    : learnView.seen ? '跳過，直接演練' : '看完了，開始設定客戶';
+  renderLearn(!learnView.seen && from === 'pick');
+  show('learn');
+}
+
+// 展開式卡片：手機上內容很長，一次只看一塊
+function fold(title, open, ...kids) {
+  const d = el('details', 'card fold'); d.open = open;
+  d.append(el('summary', null, title), ...kids);
+  return d;
+}
+
+function renderLearn(first) {
+  const v = learnView, g = v.digest || {}, b = $('#l-body');
+  b.innerHTML = '';
+  const has = x => x && !/^教材未載明/.test(String(x).trim());
+
+  const top = el('div', 'card');
+  top.append(el('h3', null, v.title));
+  if (has(g.overview)) top.append(el('p', null, g.overview));
+  if (has(g.target)) top.append(el('p', 'lbl', '最適合的客戶'), el('p', null, g.target));
+  b.append(top);
+
+  if (v.keyPoints?.length) {
+    const c = el('div', 'card key');
+    c.append(el('h4', null, '🎯 演練時要講到的重點'));
+    const ol = el('ol'); v.keyPoints.forEach(k => ol.append(el('li', null, k))); c.append(ol);
+    c.append(el('p', 'note', '演練結束後，教練回饋會逐點檢查你有沒有把這幾點講給客戶聽。'));
+    b.append(c);
+  }
+
+  b.append(coachCard());
+
+  if (g.coverages?.length) {
+    const u = el('ul');
+    g.coverages.forEach(x => { const li = el('li'); li.append(el('b', null, x.name || ''), document.createTextNode('：' + (x.detail || ''))); u.append(li); });
+    b.append(fold('保障內容', false, u));
+  }
+  if (g.selling_points?.length) {
+    const w = el('div');
+    g.selling_points.forEach(s => {
+      const d = el('div', 'fabe');
+      d.append(el('b', null, s.feature || ''));
+      if (has(s.advantage)) d.append(el('p', null, '優勢：' + s.advantage));
+      if (has(s.benefit)) d.append(el('p', null, '對客戶的好處：' + s.benefit));
+      d.append(el('p', 'muted', '教材佐證：' + (s.evidence || '教材未提供佐證')));
+      w.append(d);
+    });
+    b.append(fold('賣點（FABE）', first, w));
+  }
+  if (g.objections?.length) {
+    const w = el('div');
+    g.objections.forEach(o => {
+      const d = el('div', 'fabe');
+      d.append(el('p', 'quote', '客戶：' + (o.q || '')), el('p', null, '你：' + (o.a || '')));
+      w.append(d);
+    });
+    b.append(fold('客戶常見疑慮與回應', first, w));
+  }
+  if (g.compliance?.length) b.append(fold('合規注意事項', false, list(g.compliance)));
+  if (g.missing?.length) {
+    const f = fold('⚠️ 教材沒寫、不能亂講', false, el('p', 'note', '客戶問到這些，老實說「我回去確認後再跟您說明」。'), list(g.missing));
+    f.classList.add('warn');
+    b.append(f);
+  }
+  b.scrollTop = 0;
+}
+
+// 第二層：教練講解。按了才產生，存起來之後直接顯示
+function coachCard() {
+  const L = learnView.lesson;
+  if (!L) {
+    const c = el('div', 'card');
+    c.append(el('h4', null, '✨ 教練講解'));
+    c.append(el('p', 'muted', '30 秒介紹稿、必講重點怎麼講、怎麼從客戶需求帶到商品、常見的講錯。'));
+    const btn = el('button', 'btn', '產生教練講解');
+    const note = el('p', 'note', '會使用你的 API 額度。每份教材只產生一次，之後會存起來重複看。');
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '教練準備中…約 10～20 秒';
+      try {
+        const r = await api('/doc/coach', { id: S.doc.id });
+        learnView.lesson = r.lesson; learnView.keyPoints = r.keyPoints;
+        renderLearn(false);
+        $('#l-body .coach')?.scrollIntoView({ block: 'start' });
+      } catch (e) {
+        if (e.auth) return logout(e.message);
+        toast(e.message, 5000); btn.disabled = false; btn.textContent = '產生教練講解';
+      }
+    };
+    c.append(btn, note);
+    return c;
+  }
+
+  const c = el('div', 'card coach');
+  c.append(el('h4', null, '✨ 教練講解'));
+  if (L.pitch) c.append(el('p', 'lbl', '30 秒介紹稿'), el('p', null, L.pitch));
+  if (L.key_points?.length) {
+    c.append(el('p', 'lbl', '必講重點怎麼講'));
+    L.key_points.forEach((k, i) => {
+      const d = el('div', 'fabe');
+      d.append(el('b', null, `${i + 1}. ${k.point}`));
+      if (k.why) d.append(el('p', 'muted', '客戶在意的是：' + k.why));
+      if (k.say) d.append(el('p', null, '「' + k.say.replace(/^「|」$/g, '') + '」'));
+      c.append(d);
+    });
+  }
+  if (L.bridges?.length) {
+    c.append(el('p', 'lbl', '從客戶需求帶到商品'));
+    L.bridges.forEach(x => {
+      const d = el('div', 'fabe');
+      if (x.need) d.append(el('b', null, x.need));
+      d.append(el('p', null, '問：「' + x.ask.replace(/^「|」$/g, '') + '」'));
+      if (x.link) d.append(el('p', 'muted', '接著：' + x.link));
+      c.append(d);
+    });
+  }
+  if (L.order?.length) {
+    c.append(el('p', 'lbl', '建議的講解順序'));
+    const ol = el('ol'); L.order.forEach(x => ol.append(el('li', null, x))); c.append(ol);
+  }
+  if (L.pitfalls?.length) c.append(el('p', 'lbl', '常見的講錯'), list(L.pitfalls));
+  return c;
+}
+
+$('#l-go').onclick = () => {
+  if (learnFrom === 'review') return show('brief');
+  if (!learnView.seen) api('/doc/seen', { id: S.doc.id }).catch(() => {});
+  openIntake('product');
+};
+$('#l-back').onclick = () => {
+  if (learnFrom === 'review') return show('brief');
+  S.docPick = 'product'; show('docs');
+};
+$('#b-learn').onclick = () => openLearn('review');
 
 $('#btn-upload').onclick = () => $('#f-file').click();
 
@@ -654,7 +801,7 @@ async function submit(text) {
     else nextTurn();
   } catch (e) {
     S.busy = false; setStatus('');
-    if (e.auth) { S.sessionId = null; return; }
+    if (e.auth) { S.sessionId = null; return logout(e.message); }
     toast(e.message);
     if (/逾時/.test(e.message)) { S.sessionId = null; show('home'); }
   }
@@ -732,6 +879,19 @@ function renderFeedback(fb) {
     c2.append(starRow(NAMES[k], s.score, s.evidence));
   }
   b.append(c2);
+
+  if (fb.key_points?.length) {
+    const got = fb.key_points.filter(k => k.covered).length;
+    const c = el('div', 'card key');
+    c.append(el('h4', null, `🎯 商品必講重點（講到 ${got}／${fb.key_points.length}）`));
+    fb.key_points.forEach(k => {
+      const d = el('div', 'kp');
+      d.append(el('b', null, (k.covered ? '✅ ' : '⬜ ') + k.point));
+      if (k.note) d.append(el('p', 'ev', k.note));
+      c.append(d);
+    });
+    b.append(c);
+  }
 
   if (fb.positives?.length) b.append(card('你做得好的地方', list(fb.positives)));
 
@@ -881,6 +1041,7 @@ function saveHistory(fb) {
       persona: fb.persona?.summary || '', name: fb.persona?.name || '',
       scores: Object.fromEntries(Object.entries(fb.scores || {}).map(([k, v]) => [k, v.score])),
       summary: fb.summary, next: fb.next_challenge,
+      kp: fb.key_points?.length ? [fb.key_points.filter(k => k.covered).length, fb.key_points.length] : undefined,
     });
     localStorage.setItem(LS, JSON.stringify(h.slice(0, 50)));
     syncSoon();
@@ -907,7 +1068,8 @@ function renderHistory() {
     c.append(el('h4', null, `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}　${r.modeName || ''}　${r.name}`));
     c.append(el('p', 'muted', r.persona));
     const tot = Object.values(r.scores || {});
-    if (tot.length) c.append(el('p', null, '平均 ' + (tot.reduce((a, x) => a + x, 0) / tot.length).toFixed(1) + ' 星'));
+    if (tot.length) c.append(el('p', null, '平均 ' + (tot.reduce((a, x) => a + x, 0) / tot.length).toFixed(1) + ' 星'
+      + (Array.isArray(r.kp) ? `｜必講重點 ${r.kp[0]}／${r.kp[1]}` : '')));
     if (r.summary) c.append(el('p', 'ev', r.summary));
     b.append(c);
   }

@@ -443,7 +443,7 @@ const MODE_FOCUS = {
   product: '本次重點是商品說明：有沒有先連結客戶需求再講商品、有沒有用客戶聽得懂的話、FABE 是否完整、面對價格與適用性疑慮如何處理。若商品資料中查不到的內容業務員卻講得很肯定，必須指出。',
 };
 
-export function evaluationPrompt({ persona, transcript, metrics, violations, mode = 'call', product = null, context = 'cold' }) {
+export function evaluationPrompt({ persona, transcript, metrics, violations, mode = 'call', product = null, context = 'cold', keyPoints = null }) {
   const M = MODES[mode] || MODES.call;
   const C = CONTEXTS[context] || CONTEXTS.cold;
   const convo = transcript.map(t => `${t.speaker === 'user' ? '業務員' : '客戶'}：${t.text}`).join('\n');
@@ -467,7 +467,13 @@ ${RAPPORT}
 【客戶設定】${persona.public_summary}｜個性：${persona.personality}｜態度：${persona.insurance_attitude}
 【客戶心裡真正在意的事（業務員原本看不到）】${(persona.hidden_needs || []).join('；')}
 【業務員本次挖到的】${metrics.revealed?.length ? metrics.revealed.join('；') : '（一項也沒有挖到）'}
-${product ? `\n【商品資料（判斷說明正確性的唯一依據）】\n${product}\n` : ''}
+${product ? `\n【商品資料（判斷說明正確性的唯一依據）】\n${product}\n` : ''}${keyPoints?.length ? `
+【本商品的必講重點（業務員在演練前的教學頁看過）】
+${keyPoints.map((k, i) => `${i + 1}. ${k}`).join('\n')}
+逐一判斷業務員在對話中有沒有把這幾點講給客戶聽：意思有傳達到就算，不必逐字相同；
+只是提到名詞、沒有說明對客戶的意義，不算講到。
+結果寫在 key_points，用編號對應，每一點都要有；note 引用逐字稿說明講了什麼，漏講的就說明可以在哪個時機帶進去。
+` : ''}
 【完整逐字稿】
 ${convo}
 
@@ -510,7 +516,57 @@ ${NO_BRAND}
   "improvements": [{"point": "改善點", "why": "為什麼重要", "how": "具體怎麼做"}],
   "example_script": "一段可以直接照著唸的示範話術",
   "compliance_note": "合規提醒；沒有違規就寫「本次未發現違規用語」",
-  "next_challenge": "下一次的具體挑戰"
+  "next_challenge": "下一次的具體挑戰"${keyPoints?.length ? `,
+  "key_points": [{"n": 1, "covered": true, "note": "依逐字稿的說明"}]` : ''}
+}`;
+}
+
+// 必講重點的檢核結果由程式對回原本的清單——只信任模型給的編號與 true/false，
+// 重點文字一律用清單原文（同 D009：讓模型挑編號，不讓它複製字串）。
+// 模型整欄漏掉時回 null，畫面就不顯示，而不是顯示「一點都沒講到」冤枉人。
+export function normalizeKeyPoints(list, raw) {
+  if (!list?.length || !Array.isArray(raw)) return null;
+  const got = new Map();
+  for (const x of raw) {
+    const n = Number(x?.n);
+    if (Number.isInteger(n) && n >= 1 && n <= list.length && !got.has(n)) got.set(n, x);
+  }
+  if (!got.size) return null;
+  return list.map((point, i) => {
+    const x = got.get(i + 1);
+    return { point, covered: x?.covered === true, note: typeof x?.note === 'string' ? x.note : '' };
+  });
+}
+
+// ── 商品教學：教練講解（使用者按了才產生，每份教材只產生一次）──
+// 只給結構化摘要、不重送整份教材：摘要裡的事實已經過「只寫教材有的」把關，
+// 這一步要的是「怎麼教」，不需要再讀一次原文——也替使用者省下大量額度。
+export function lessonPrompt(digest) {
+  return `${BASE}
+
+【任務】你是資深業務教練。下面是一份商品教材整理出來的重點，請把它變成「教業務員怎麼介紹這個商品」的教學內容。
+業務員看完之後，要能拿去跟客戶講。
+
+【極重要】
+1. 商品事實（保障內容、保費、給付、期間、條件）只能用下方資料裡有的，不得補充、推估或換算。
+2. 資料標示「教材未載明」或列在 missing 的部分，不得當成事實寫進任何話術。
+3. 話術要是台灣業務員會講的口語，客戶聽得懂，不堆專有名詞。
+4. key_points 固定 3 點，是介紹這個商品時「一定要讓客戶知道」的事，每點一句話、不超過 30 字。
+   演練結束後，系統會用這 3 點檢查業務員有沒有講到。
+5. 不得出現保證收益、穩賺、一定理賠等違規說法；pitfalls 要點出這個商品最容易講錯或講過頭的地方。
+
+${NO_BRAND}
+
+【商品教材重點】
+${JSON.stringify(digest, null, 1)}
+
+【只輸出 JSON，不要任何其他文字】
+{
+  "pitch": "30 秒介紹稿，可以直接照著講的口語，120 字以內",
+  "key_points": [{"point": "必講重點", "why": "客戶為什麼會在意", "say": "可以怎麼講，口語一句"}],
+  "bridges": [{"need": "客戶可能的狀況或擔心", "ask": "用來帶出這個需求的提問", "link": "客戶回答後怎麼接到商品"}],
+  "order": ["建議的講解順序，每步一句"],
+  "pitfalls": ["常見的講錯、講過頭或不能講的話，以及為什麼"]
 }`;
 }
 

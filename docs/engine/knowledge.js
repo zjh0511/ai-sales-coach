@@ -10,7 +10,7 @@
 
 import { officeText } from './docx.js';
 import { parseJson } from './gateway.js';
-import { digestPrompt } from './prompts.js';
+import { digestPrompt, lessonPrompt, scrubDeep } from './prompts.js';
 import { allDocs, putDoc, delDoc, getDocById } from './store.js';
 
 const MAX_BYTES = 18 * 1024 * 1024;
@@ -101,6 +101,64 @@ export function sourceFor(doc, gw) {
   if (doc.text) return { text: doc.text.slice(0, 120_000), file: null };
   if (!gw?.supportsFile || !doc.raw) return { text: null, file: null };
   return { text: null, file: { mime: doc.mime, data: doc.raw } };
+}
+
+// ── 商品教學（演練前的「商品重點」頁）──────────────────────────
+// 第一層直接用上傳時已經解析好的 digest，不花額度；
+// 第二層「教練講解」使用者按了才產生，存回文件，之後重複看不再花額度。
+
+// 演練結束後要檢查的「必講重點」。有教練講解就用它的 3 點；
+// 沒有的話用教材的前 3 個賣點——教學頁與評分永遠看同一份清單。
+export function keyPoints(doc) {
+  const fromLesson = (doc?.lesson?.key_points || []).map(k => (k?.point || '').trim()).filter(Boolean);
+  if (fromLesson.length) return fromLesson.slice(0, 3);
+  return (doc?.digest?.selling_points || [])
+    .map(s => [s?.feature, s?.benefit].filter(Boolean).join('：').trim())
+    .filter(Boolean).slice(0, 3);
+}
+
+export async function lessonView(id) {
+  const doc = await getDocById(id);
+  if (!doc) return null;
+  return {
+    id: doc.id, title: doc.title || doc.name,
+    digest: doc.digest || {}, lesson: doc.lesson || null,
+    seen: !!doc.seenAt, keyPoints: keyPoints(doc),
+  };
+}
+
+export async function markSeen(id) {
+  const doc = await getDocById(id);
+  if (!doc || doc.seenAt) return;
+  doc.seenAt = Date.now();
+  await putDoc(doc);
+}
+
+export async function coachLesson(gw, id) {
+  const doc = await getDocById(id);
+  if (!doc) throw new Error('請先選擇一份商品教材');
+  if (doc.lesson) return { lesson: doc.lesson, keyPoints: keyPoints(doc), cached: true };
+
+  const prompt = lessonPrompt(doc.digest || {});
+  let L = null;
+  for (let i = 0; i < 2 && !L?.key_points?.length; i++) {
+    const r = await gw.generate(prompt, { json: true, temp: 0.5 + i * 0.2, max: 6000, tier: 'judge', noThink: true, timeout: 90000 });
+    L = parseJson(r.text);
+  }
+  if (!L?.key_points?.length) throw new Error('教練講解產生失敗，請再試一次');
+
+  const arr = v => (Array.isArray(v) ? v : []);
+  const lesson = scrubDeep({
+    pitch: typeof L.pitch === 'string' ? L.pitch : '',
+    key_points: arr(L.key_points).filter(k => k?.point).slice(0, 3),
+    bridges: arr(L.bridges).filter(b => b?.ask).slice(0, 4),
+    order: arr(L.order).filter(x => typeof x === 'string').slice(0, 6),
+    pitfalls: arr(L.pitfalls).filter(x => typeof x === 'string').slice(0, 5),
+  });
+  lesson.at = Date.now();
+  doc.lesson = lesson;
+  await putDoc(doc);
+  return { lesson, keyPoints: keyPoints(doc), cached: false };
 }
 
 // 給角色扮演用的商品重點（要短，塞進 persona prompt）

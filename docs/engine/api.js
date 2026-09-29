@@ -104,6 +104,15 @@ export async function api(path, body = {}) {
       }
       case '/doc/delete': return { ok: await KB.deleteDoc(body.id) ?? true };
 
+      // 商品教學：第一層直接讀、第二層（教練講解）按了才呼叫模型
+      case '/doc/lesson': {
+        const v = await KB.lessonView(body.id);
+        if (!v) throw new Error('請先選擇一份商品教材');
+        return v;
+      }
+      case '/doc/seen': await KB.markSeen(body.id); return { ok: true };
+      case '/doc/coach': return await KB.coachLesson(need(), body.id);
+
       // 功能五：理賠諮詢
       case '/claim/ask': {
         const doc = await KB.getDoc(body.docId);
@@ -136,7 +145,7 @@ export async function api(path, body = {}) {
     }
 
     // 我們自己丟出的操作提示，原文就是給使用者看的
-    if (/請先|沒有收到|未指定|請描述|請輸入|超過上限|讀不到|解析失敗|不支援|逾時，請重新開始/.test(raw)) {
+    if (/請先|沒有收到|未指定|請描述|請輸入|超過上限|讀不到|解析失敗|產生失敗|不支援|逾時，請重新開始/.test(raw)) {
       throw new Error(raw);
     }
 

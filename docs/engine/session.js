@@ -4,7 +4,7 @@
 
 import { parseJson } from './gateway.js';
 import { checkCompliance, interventionMessage } from './compliance.js';
-import { productBrief } from './knowledge.js';
+import { productBrief, keyPoints } from './knowledge.js';
 import * as P from './prompts.js';
 
 const MIN_TURNS = 4;         // 演練終點由程式判定，不讓 LLM 在第一回合就結束
@@ -35,6 +35,7 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
   difficulty = Math.min(5, Math.max(1, Number(difficulty) || 1));
   if (!P.CONTEXTS[context]) context = 'cold';
   const brief = doc ? productBrief(doc) : null;
+  const points = doc ? keyPoints(doc) : null;       // 教學頁上的必講重點，評分時逐點檢查
   const base = P.personaPrompt({ gender, age, background, difficulty, mode, product: brief, context, contextNote });
 
   // 示範話術若洩漏了業務員不可能知道的客戶私人資訊，重新產生一次（規格 §68 Output Validation）
@@ -77,7 +78,7 @@ export async function startSession(gw, { mode = 'call', gender, age, background,
   const id = newId();
   sessions.set(id, {
     id, mode, context, state: 'READY', persona,
-    docId: doc?.id || null, productBrief: brief,
+    docId: doc?.id || null, productBrief: brief, keyPoints: points,
     difficulty, maxGuidance: D.guidance, canEnd: D.canEnd,
     trust,
     history: [], violations: [], revealed: new Set(),
@@ -219,6 +220,7 @@ async function evaluateInner(gw, s) {
     persona: s.persona,
     transcript: s.history.filter(h => h.speaker !== 'system'),
     metrics, violations: s.violations, mode: s.mode, product: s.productBrief, context: s.context,
+    keyPoints: s.keyPoints,
   });
 
   // 評分是使用者最在意的產出，解析失敗要重試（不同溫度會改變輸出結構）
@@ -242,6 +244,7 @@ async function evaluateInner(gw, s) {
   fb.example_script = P.scrubBrands(fb.example_script);
   fb.improvements = P.scrubDeep(fb.improvements);
   fb.next_challenge = P.scrubBrands(fb.next_challenge);
+  fb.key_points = P.normalizeKeyPoints(s.keyPoints, fb.key_points);
 
   s.state = 'FEEDBACK_READY';
   return {

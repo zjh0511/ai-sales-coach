@@ -404,6 +404,99 @@ if (run(1)) {
     walk(path.join(DIR, 'tools'));
     ok(!bad.length, '除了 tab 以外沒有任何控制字元', bad.slice(0, 5).join('、'));
   }
+  // ── 商品重點教學與「必講重點」檢核（D040）──────────────────────
+  // 第一層不花額度；第二層按了才產生、只產生一次；
+  // 教學頁上列的重點，就是評分時逐點檢查的那一份。
+  console.log('');
+  console.log('=== 1n. 商品重點教學與必講重點 ===');
+  {
+    const { putDoc } = await import('../docs/engine/store.js');
+    const digest = {
+      title: '安心醫療險', overview: '住院與手術的實支實付', target: '30～45 歲上班族',
+      coverages: [{ name: '住院日額', detail: '每日 2,000 元' }],
+      selling_points: [
+        { feature: '實支實付', advantage: '不限健保', benefit: '自費項目也能報', evidence: '第 3 頁' },
+        { feature: '手術定額', advantage: '依表給付', benefit: '大小手術都有', evidence: '第 4 頁' },
+        { feature: '保證續保', advantage: '到 75 歲', benefit: '老了不怕被拒保', evidence: '第 5 頁' },
+        { feature: '第四點', advantage: '', benefit: '不該出現在清單', evidence: '' },
+      ],
+      objections: [{ q: '我有公司團保了', a: '團保離職就沒了' }],
+      missing: ['保費'],
+    };
+    await putDoc({ id: 'zzlesson', name: 'a.pdf', kind: 'product', title: '安心醫療險', at: 1, digest });
+
+    let v = await KB.lessonView('zzlesson');
+    ok(v && v.seen === false && v.lesson === null, '第一次打開：尚未看過、沒有教練講解（不花額度）');
+    ok(v.keyPoints.length === 3 && v.keyPoints[0] === '實支實付：自費項目也能報',
+      '沒有教練講解時，必講重點取教材前 3 個賣點', v.keyPoints.join(' / '));
+    await KB.markSeen('zzlesson');
+    ok((await KB.lessonView('zzlesson')).seen === true, '看過之後記住（下次按鈕變「跳過，直接演練」）');
+
+    let calls = 0;
+    const lessonGw = { generate: async (prompt, opts) => {
+      calls++;
+      ok(/安心醫療險/.test(prompt) && opts?.json, '教練講解只送結構化摘要，要求 JSON');
+      return { text: JSON.stringify({
+        pitch: '南山人壽的這張醫療險，自費也能報。',
+        key_points: [{ point: '自費醫材也能實支實付', why: '怕自費', say: '自費的也可以報' },
+          { point: '保證續保到 75 歲', why: '怕老了被拒', say: '' }, { point: '手術依表定額給付', why: '', say: '' }],
+        bridges: [{ need: '擔心自費', ask: '您有聽過自費醫材嗎？', link: '這張就是補這塊' }],
+        order: ['先問需求', '再講商品'], pitfalls: ['不能說一定理賠'],
+      }), ms: 1, model: 'fake' };
+    } };
+    const r1 = await KB.coachLesson(lessonGw, 'zzlesson');
+    ok(r1.cached === false && calls === 1, '按下「產生教練講解」才呼叫模型');
+    ok(!/南山/.test(r1.lesson.pitch) && /○○人壽/.test(r1.lesson.pitch), '教練講解套用品牌中立化', r1.lesson.pitch);
+    ok(r1.keyPoints[0] === '自費醫材也能實支實付', '有教練講解後，必講重點改用講解裡的 3 點', r1.keyPoints.join(' / '));
+    const r2 = await KB.coachLesson(lessonGw, 'zzlesson');
+    ok(r2.cached === true && calls === 1, '第二次打開直接用存好的，不再花額度', `calls=${calls}`);
+
+    // 評分：必講重點用編號對回清單，模型改寫的重點文字不採用
+    const kp = ['A 點', 'B 點', 'C 點'];
+    const n = P.normalizeKeyPoints(kp, [{ n: 2, covered: true, note: '有講' }, { n: 1, covered: 'yes' }, { n: 9, covered: true }, { n: 2, covered: false }]);
+    ok(n.map(x => x.point).join() === 'A 點,B 點,C 點', '檢核結果依清單原文與順序');
+    ok(n[1].covered === true && n[1].note === '有講', '編號 2 採用第一次出現的結果（重複的忽略）');
+    ok(n[0].covered === false, '只有 true 才算講到（"yes" 不算）');
+    ok(n[2].covered === false, '模型漏掉的點算沒講到；超出範圍的編號忽略');
+    ok(P.normalizeKeyPoints(kp, undefined) === null, '模型整欄漏掉 → 不顯示，而不是冤枉說一點都沒講');
+    ok(P.normalizeKeyPoints(null, [{ n: 1, covered: true }]) === null, '沒有必講重點（非商品演練）→ 不顯示');
+
+    const ep = P.evaluationPrompt({ persona: { scenario: {} }, transcript: [], metrics: {}, violations: [], mode: 'product', keyPoints: kp });
+    ok(/必講重點/.test(ep) && /1\. A 點/.test(ep) && /"key_points"/.test(ep), '商品演練的評分提示帶入必講重點清單');
+    const ep2 = P.evaluationPrompt({ persona: { scenario: {} }, transcript: [], metrics: {}, violations: [], mode: 'call' });
+    ok(!/必講重點/.test(ep2) && !/key_points/.test(ep2), '其他演練的評分提示不受影響');
+
+    // 端到端：session 建立時抓下清單，評分回傳對好的檢核結果
+    const SE = await import('../docs/engine/session.js?kp');
+    const doc = await KB.getDoc('zzlesson');
+    const persona = {
+      name: '林小姐', public_summary: '35 歲上班族', opening_line: '你好', trust: 60,
+      personality: '謹慎', communication_style: '直接', hidden_needs: [], scenario: { objective: '介紹商品' },
+      demo: { opening: '', key_question: '', objection_handling: { customer: '', you: '' } },
+    };
+    let judgePrompt = '';
+    const gw = { generate: async (text, opts) => {
+      if (opts?.tier === 'judge') {
+        judgePrompt = text;
+        return { text: JSON.stringify({
+          scores: { fluency: { score: 3, evidence: '' } }, summary: '', improvements: [],
+          key_points: [{ n: 1, covered: true, note: '有講到自費' }, { n: 2, covered: false }, { n: 3, covered: false }],
+        }), ms: 1, model: 'fake' };
+      }
+      if (/opening_line/.test(text)) return { text: JSON.stringify(persona), ms: 1, model: 'fake' };
+      return { text: JSON.stringify({ say: '嗯。', trust_delta: 0, revealed: [], end: false }), ms: 1, model: 'fake' };
+    } };
+    const pub = await SE.startSession(gw, { mode: 'product', gender: '女', age: '35', background: '上班族', doc });
+    const s = SE.getSession(pub.sessionId);
+    SE.beginRoleplay(s);
+    await SE.handleTurn(gw, s, '這張自費醫材也能報');
+    const fb = await SE.evaluate(gw, s);
+    ok(/1\. 自費醫材也能實支實付/.test(judgePrompt), '評分時檢查的就是教學頁上的那 3 點');
+    ok(fb.key_points?.length === 3 && fb.key_points.filter(k => k.covered).length === 1, '回饋帶回檢核結果（講到 1／3）');
+    ok(fb.key_points?.[1]?.point === '保證續保到 75 歲', '回饋裡的重點文字是清單原文（模型只給編號）', fb.key_points?.[1]?.point);
+    SE.dropSession(s.id);
+    await KB.deleteDoc('zzlesson');
+  }
   // ── 真人語音（Gemini TTS）與內建朗讀的退路 ────────────────────
   // 雲端語音的每一種失敗都必須退回內建朗讀、演練不中斷；
   // 但使用者自己插話打斷的，不能再用內建朗讀把同一句念一次。
@@ -656,6 +749,16 @@ if (run(4)) {
     const brief = KB.productBrief(productDoc);
     ok(brief.length > 50 && brief.length <= 4000, `商品重點摘要 ${brief.length} 字，可塞入 Persona`);
 
+    // 商品重點教學的第二層：真的呼叫模型產生教練講解
+    t0 = t();
+    const L = await KB.coachLesson(gw, up.id);
+    perf.lesson = t() - t0;
+    ok(L.lesson.key_points.length === 3, `教練講解產生 ${perf.lesson}ms，必講重點 3 點`, L.keyPoints.join(' / '));
+    ok(!!L.lesson.pitch && L.lesson.bridges.length > 0, '有 30 秒介紹稿與需求連結提問');
+    ok(scrubBrands(JSON.stringify(L.lesson)) === JSON.stringify(L.lesson), '教練講解沒有保險公司名稱');
+    console.log(`        30 秒介紹：${L.lesson.pitch}`);
+    productDoc = await KB.getDoc(up.id);       // 帶著教練講解的版本，評分會用它的 3 點
+
     t0 = t();
     const st = await CE.startSession(gw, {
       mode: 'product', gender: '男', age: '約 45 歲',
@@ -676,6 +779,8 @@ if (run(4)) {
     }
     const fb = await CE.evaluate(gw, s);
     ok(!!fb.scores && fb.mode === 'product', '商品演練評分完成');
+    ok(fb.key_points?.length === 3, '評分逐點檢查必講重點',
+      (fb.key_points || []).map(k => (k.covered ? '✅' : '⬜') + k.point).join(' / '));
     console.log(`        總評：${fb.summary}`);
   } else {
     console.log('  --  找不到範例 PPTX，略過本節');
