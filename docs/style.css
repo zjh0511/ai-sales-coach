@@ -197,3 +197,16 @@ a{color:var(--acc)}
   border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:21px;opacity:0;
   transition:opacity .25s;pointer-events:none;max-width:86%;text-align:center;z-index:9}
 #toast.on{opacity:1}
+
+/* 理賠諮詢 */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.two .chips{min-height:52px;align-items:center}
+.pol{margin:10px 0}
+.pol.on{border-color:var(--acc)}
+.pol-h{margin:0!important;color:var(--fg)!important;font-size:21px!important}
+label.inline input[type=checkbox]{width:26px;height:26px;flex:none;accent-color:var(--acc)}
+.pol input[type=text],.pol input[type=date]{margin-top:2px}
+#cp-upload{margin:6px 0 4px}
+.big{font-size:36px;font-weight:700;margin:4px 0!important}
+.amt{color:var(--ok);font-weight:700}
+.pt .tag{font-size:16.5px;border-radius:4px;padding:1px 6px;margin-left:8px;font-weight:400;vertical-align:middle}

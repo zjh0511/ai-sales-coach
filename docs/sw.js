@@ -10,7 +10,7 @@
 // 注意：離線時只有「介面」打得開。演練需要呼叫 AI 服務商的 API，
 //   那一定要網路。這一點會在畫面上明確告知，不假裝可以離線練習。
 
-const VERSION = 'v16';                 // 改版時遞增，activate 時會清掉舊快取
+const VERSION = 'v17';                 // 改版時遞增，activate 時會清掉舊快取
 const CACHE = `aicoach-${VERSION}`;
 
 // 應用外殼：離線時要能顯示介面與說明

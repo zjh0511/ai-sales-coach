@@ -113,12 +113,16 @@ export async function api(path, body = {}) {
       case '/doc/seen': await KB.markSeen(body.id); return { ok: true };
       case '/doc/coach': return await KB.coachLesson(need(), body.id);
 
-      // 功能五：理賠諮詢
-      case '/claim/ask': {
-        const doc = await KB.getDoc(body.docId);
-        if (!doc) throw new Error('請先選擇一份保單條款');
-        if (!body.question?.trim()) throw new Error('請描述客戶的狀況');
-        return await AD.claimAdvice(need(), doc, { question: body.question, history: body.history });
+      // 功能五：理賠諮詢（客戶的狀況＋多張保單）
+      case '/claim/case': {
+        const pols = [];
+        for (const p of (body.policies || []).slice(0, AD.MAX_POLICIES)) {
+          const doc = await KB.getDoc(p.docId);
+          if (doc?.kind === 'policy') pols.push({ doc, plan: p.plan, start: p.start });
+        }
+        return await AD.claimCase(need(), {
+          client: body.client || {}, situation: body.situation || {}, extra: body.extra || [], policies: pols,
+        });
       }
 
       // 功能六：行銷諮詢

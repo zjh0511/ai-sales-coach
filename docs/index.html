@@ -136,7 +136,7 @@
     <button class="tile" data-fn="call"><span class="t-ico">📞</span><span><b>電話邀約語音對練</b><small>AI 扮演客戶，跟你真的講一通電話</small></span></button>
     <button class="tile" data-fn="needs"><span class="t-ico">🔍</span><span><b>發掘需求角色扮演</b><small>練習用提問挖出客戶沒說出口的需求</small></span></button>
     <button class="tile" data-fn="product"><span class="t-ico">📊</span><span><b>商品行銷語音演練</b><small>上傳公司教材，針對商品做行銷演練</small></span></button>
-    <button class="tile" data-fn="claim"><span class="t-ico">🏥</span><span><b>客戶理賠諮詢建議</b><small>上傳保單條款，查詢可能的理賠項目</small></span></button>
+    <button class="tile" data-fn="claim"><span class="t-ico">🏥</span><span><b>客戶理賠諮詢建議</b><small>客戶問「這個有沒有賠、賠多少」時，對照他的保單初步分析</small></span></button>
     <button class="tile" data-fn="chat"><span class="t-ico">💬</span><span><b>問問其他問題</b><small>客戶狀況、話術、法規…業務上的疑問都可以問</small></span></button>
     <div class="two-links">
       <button class="link" data-go="docs">我的文件</button>
@@ -289,16 +289,65 @@
   </div>
 </section>
 
-<!-- 功能五：理賠諮詢 -->
+<!-- 功能五：理賠諮詢 ① 客戶的狀況 -->
+<section id="s-cs" class="screen">
+  <header class="bar"><button class="back" data-go="home">‹</button><span>理賠諮詢　① 客戶的狀況</span></header>
+  <div class="pad scroll">
+    <div id="cs-saved-wrap" hidden>
+      <label>之前諮詢過的客戶<small>點一下帶入稱呼和保單</small></label>
+      <div class="chips" id="cs-saved"></div>
+    </div>
+    <label>客戶稱呼<small>選填。只寫稱呼就好，例如「王大哥」「林小姐」</small></label>
+    <input id="cs-name" type="text" placeholder="例如：王大哥" autocomplete="off">
+    <div class="two">
+      <div><label>年齡</label><input id="cs-age" type="text" inputmode="numeric" placeholder="選填" autocomplete="off"></div>
+      <div><label>性別</label><div class="chips" id="cs-gender"><button class="chip" data-v="男">男</button><button class="chip" data-v="女">女</button></div></div>
+    </div>
+    <label>這次的狀況<small>可以複選</small></label>
+    <div class="chips multi" id="cs-tags">
+      <button class="chip" data-v="住院">住院</button><button class="chip" data-v="手術">手術</button>
+      <button class="chip" data-v="門診">門診</button><button class="chip" data-v="癌症">癌症</button>
+      <button class="chip" data-v="意外受傷">意外受傷</button><button class="chip" data-v="重大疾病">重大疾病</button>
+      <button class="chip" data-v="其他">其他</button>
+    </div>
+    <label>客戶怎麼說<small>想到什麼寫什麼。也可以按鍵盤上的麥克風直接講</small></label>
+    <textarea id="cs-text" rows="4" placeholder="例如：上週騎車摔倒右腿骨折，住院 5 天，有開刀打鋼釘，醫生建議用自費的骨材"></textarea>
+    <div id="cs-f-days" hidden><label>住院天數</label><input id="cs-days" type="number" inputmode="numeric" min="0" placeholder="例如：5"></div>
+    <div id="cs-f-surgery" hidden>
+      <label>手術名稱</label><input id="cs-surgery" type="text" placeholder="例如：骨折復位固定手術" autocomplete="off">
+      <div class="chips" id="cs-outpt"><button class="chip" data-v="1">門診手術</button><button class="chip" data-v="0">住院中手術</button></div>
+    </div>
+    <label>自費金額<small>選填，大概的數字就好（元）</small></label>
+    <input id="cs-selfpay" type="number" inputmode="numeric" min="0" placeholder="例如：80000">
+    <label>發病或事故日期<small>選填。用來判斷等待期</small></label>
+    <input id="cs-date" type="date">
+  </div>
+  <div class="foot"><button class="btn primary" id="cs-next">下一步：客戶的保單</button></div>
+</section>
+
+<!-- 功能五：理賠諮詢 ② 客戶的保單 -->
+<section id="s-cp" class="screen">
+  <header class="bar"><button class="back" id="cp-back">‹</button><span>理賠諮詢　② 客戶的保單</span></header>
+  <div class="pad scroll">
+    <p class="muted">勾選客戶有的保單。填了投保計劃或保額，才算得出大概金額；不知道可以先空著。</p>
+    <div id="cp-list"></div>
+    <button class="btn" id="cp-upload">＋ 上傳保單條款</button>
+    <label class="inline"><input type="checkbox" id="cp-remember"> 記住這位客戶的保單（只存在這支手機，不含病況）</label>
+    <p class="note">客戶的病況只用在這次分析，不會存下來，也不會同步到雲端。分析時，內容會送到你自己的 Google AI 帳號處理。</p>
+  </div>
+  <div class="foot"><button class="btn primary" id="cp-go">開始分析</button></div>
+</section>
+
+<!-- 功能五：理賠諮詢 ③ 分析結果 -->
 <section id="s-claim" class="screen">
-  <header class="bar"><button class="back" data-go="home">‹</button><span id="c-title">理賠諮詢</span><span class="spacer"></span><button class="end" data-go="docs-policy">換條款</button></header>
-  <div id="c-log" class="log scroll"></div>
+  <header class="bar"><button class="back" data-go="home">‹</button><span>理賠分析</span><span class="spacer"></span><button class="end" id="c-edit">修改</button></header>
+  <div id="c-log" class="pad scroll"></div>
   <div class="foot">
     <div class="alt">
-      <input id="c-text" type="text" placeholder="描述客戶的狀況…" autocomplete="off">
+      <input id="c-text" type="text" placeholder="補充客戶的回答或追問…" autocomplete="off">
       <button class="btn sm" id="c-send">送出</button>
     </div>
-    <p class="note">依條款所做的初步判斷，實際理賠以保險公司核定為準。</p>
+    <p class="note">補充之後會重新分析整個案件。依條款所做的初步判斷，實際理賠以保險公司核定為準。</p>
   </div>
 </section>
 

@@ -11,9 +11,11 @@ const LS = 'aicoach.history';
 const S = {
   fn: 'call',            // 目前功能：pain | call | needs | product | claim | chat
   sessionId: null, persona: null, ended: false, busy: false,
-  docPick: null,         // 進入文件頁的目的：null=管理 / 'product' / 'policy'
+  docPick: null,         // 進入文件頁的目的：null=管理 / 'product'（選商品教材）
+  uploadTo: null,        // 從理賠諮詢的「客戶的保單」上傳時為 'cp'，上傳完回到那一頁
   doc: null,             // 已選定的文件 {id,title}
-  claimHistory: [], chatHistory: [],
+  claim: null,           // 理賠諮詢這一件：{ client, situation, policies, extra, result }
+  chatHistory: [],
   lastCustomer: null,    // 痛點分析用過的客戶資料，可直接接去演練
 };
 
@@ -38,7 +40,6 @@ document.addEventListener('click', e => {
   const g = e.target.closest('[data-go]');
   if (!g) return;
   const to = g.dataset.go;
-  if (to === 'docs-policy') { S.docPick = 'policy'; return show('docs'); }
   if (to === 'home') { abort(); S.docPick = null; }
   if (to === 'intake') return openIntake(S.fn);
   show(to);
@@ -312,7 +313,7 @@ document.querySelectorAll('[data-fn]').forEach(b => b.onclick = () => {
   const fn = b.dataset.fn;
   S.fn = fn;
   if (fn === 'product') { S.docPick = 'product'; return show('docs'); }
-  if (fn === 'claim') { S.docPick = 'policy'; return show('docs'); }
+  if (fn === 'claim') return openClaim();
   if (fn === 'chat') { renderChat(); return show('chat'); }
   openIntake(fn);
 });
@@ -436,10 +437,8 @@ $('#btn-pain2call').onclick = () => openIntake('call');
 // ── 文件知識庫 ──────────────────────────────────────────────
 async function renderDocs() {
   const kind = S.docPick;
-  $('#d-title').textContent = kind === 'product' ? '選擇商品教材' : kind === 'policy' ? '選擇保單條款' : '我的文件';
-  $('#d-hint').textContent = kind === 'policy'
-    ? '上傳保單條款或商品說明書。支援 PDF、DOCX、PPTX、TXT，單檔 18MB 以內。'
-    : '支援 PDF、Word（.docx）、PowerPoint（.pptx）、純文字，單檔 18MB 以內。';
+  $('#d-title').textContent = kind === 'product' ? '選擇商品教材' : '我的文件';
+  $('#d-hint').textContent = '支援 PDF、Word（.docx）、PowerPoint（.pptx）、純文字，單檔 18MB 以內。';
 
   const b = $('#doc-body'); b.innerHTML = '';
   let docs = [];
@@ -476,8 +475,8 @@ async function renderDocs() {
 
 function chooseDoc(d) {
   S.doc = { id: d.id, title: d.title || d.name };
-  if (S.docPick === 'product') { S.docPick = null; openLearn('pick'); }
-  else { S.docPick = null; S.claimHistory = []; $('#c-title').textContent = S.doc.title; renderClaim(); show('claim'); }
+  S.docPick = null;
+  openLearn('pick');           // 文件頁只有選商品教材時才有「使用」；保單在理賠諮詢的第二步勾選
 }
 
 // ── 商品重點教學 ────────────────────────────────────────────
@@ -626,14 +625,15 @@ $('#l-back').onclick = () => {
 };
 $('#b-learn').onclick = () => openLearn('review');
 
-$('#btn-upload').onclick = () => $('#f-file').click();
+$('#btn-upload').onclick = () => { S.uploadTo = null; $('#f-file').click(); };
 
 $('#f-file').onchange = async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
   if (f.size > 18 * 1024 * 1024) return toast('檔案超過 18MB，請壓縮或分割');
 
-  let kind = S.docPick;
+  const toCase = S.uploadTo === 'cp';
+  let kind = toCase ? 'policy' : S.docPick;
   if (!kind) kind = confirm('這份文件是「保單條款」嗎？\n\n確定＝保單條款（理賠查詢用）\n取消＝商品教材（行銷演練用）') ? 'policy' : 'product';
 
   busy(`正在解析「${f.name}」…\n文件較長時可能需要一兩分鐘`);
@@ -646,8 +646,17 @@ $('#f-file').onchange = async e => {
     });
     const d = await api('/doc/upload', { name: f.name, kind, base64 });
     toast(d.warning ? `已建立「${d.title}」，但⚠️ ${d.warning}` : `已建立知識庫：${d.title}`, d.warning ? 7000 : 2800);
-    S.docPick = kind;
-  } catch (e) { toast(e.message, 5000); }
+    if (toCase) {                 // 理賠諮詢裡上傳的，直接幫他勾起來
+      S.uploadTo = null;
+      if (S.claim.policies.length < MAX_POL) S.claim.policies.push({ docId: d.id, plan: '', start: '' });
+      return openPolicies(false);
+    }
+    S.docPick = kind === 'product' ? 'product' : null;
+  } catch (e) {
+    if (e.auth) return logout(e.message);
+    toast(e.message, 5000);
+    if (toCase) { S.uploadTo = null; return show('cp'); }
+  }
   show('docs');
 };
 
@@ -934,64 +943,227 @@ function renderFeedback(fb) {
 }
 
 // ── 功能五：理賠諮詢 ────────────────────────────────────────
-function renderClaim() {
-  const b = $('#c-log'); b.innerHTML = '';
-  if (!S.claimHistory.length) {
-    const m = el('div', 'msg coach');
-    m.append(el('h5', null, `已載入：${S.doc?.title || ''}`));
-    m.append(el('p', null, '描述客戶遇到的狀況，我會依這份條款判斷可能可以申請的項目。例如：'));
-    m.append(list(['客戶因為車禍住院五天，做了手術', '客戶確診乳癌，目前住院化療中', '客戶小孩發燒門診三次，有健保住院兩天']));
-    b.append(m);
-  }
-  for (const t of S.claimHistory) {
-    if (t.role === 'user') push('#c-log', 'user', t.text);
-    else b.append(claimCard(t.data));
-  }
-  b.scrollTop = b.scrollHeight;
+// 情境是客戶打電話來問「這個有沒有賠、賠多少」：
+//   ① 客戶的狀況 → ② 客戶的保單（可多張、各填保額）→ ③ 分析結果（可補充後重新分析）
+// 「記住這位客戶」只存稱呼＋保單＋保額，存在這支手機；病況一律不存。
+const CL_KEY = 'aicoach.clients';
+const MAX_POL = 5;                         // 與 engine/advisor.js 的 MAX_POLICIES 一致
+const fmt = n => Number(n).toLocaleString('en-US');
+
+const savedClients = () => { try { return JSON.parse(localStorage.getItem(CL_KEY) || '[]'); } catch { return []; } };
+function storeClient(name, policies, keep) {
+  try {
+    const list = savedClients().filter(c => c.name !== name);
+    if (keep && name) list.unshift({ name, at: Date.now(), policies: policies.map(({ docId, plan, start }) => ({ docId, plan, start })) });
+    localStorage.setItem(CL_KEY, JSON.stringify(list.slice(0, 30)));
+  } catch { /* 容量滿時忽略 */ }
 }
 
-function claimCard(d) {
-  const m = el('div', 'msg coach');
-  if (d.understanding) m.append(el('h5', null, '我理解的狀況'), el('p', null, d.understanding));
+const caseTags = () => [...$('#cs-tags').querySelectorAll('.chip.on')].map(c => c.dataset.v);
+function syncCaseFields() {
+  const t = caseTags();
+  $('#cs-f-days').hidden = !t.includes('住院');
+  $('#cs-f-surgery').hidden = !t.includes('手術');
+}
 
-  if (d.likely?.length) {
-    m.append(el('h5', null, '可能可以申請'));
-    for (const x of d.likely) {
+function openClaim() {
+  S.claim = { client: {}, situation: {}, policies: [], extra: [], result: null };
+  for (const id of ['#cs-name', '#cs-age', '#cs-text', '#cs-days', '#cs-surgery', '#cs-selfpay', '#cs-date']) $(id).value = '';
+  document.querySelectorAll('#s-cs .chip.on').forEach(c => c.classList.remove('on'));
+  syncCaseFields();
+  renderSavedClients();
+  show('cs');
+}
+
+function renderSavedClients() {
+  const list = savedClients(), box = $('#cs-saved');
+  box.innerHTML = '';
+  $('#cs-saved-wrap').hidden = !list.length;
+  for (const c of list) {
+    const b = el('button', 'chip', c.name);
+    b.onclick = () => {
+      $('#cs-name').value = c.name;
+      S.claim.policies = (c.policies || []).map(p => ({ ...p }));
+      box.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b));
+    };
+    box.append(b);
+  }
+}
+
+// 性別、門診／住院手術：單選，但可以再點一下取消（選填）
+for (const id of ['#cs-gender', '#cs-outpt']) {
+  $(id).addEventListener('click', e => {
+    const c = e.target.closest('.chip'); if (!c) return;
+    const was = c.classList.contains('on');
+    $(id).querySelectorAll('.chip').forEach(x => x.classList.remove('on'));
+    if (!was) c.classList.add('on');
+  });
+}
+$('#cs-tags').addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  c.classList.toggle('on');
+  syncCaseFields();
+});
+
+function readCase() {
+  const t = caseTags(), outpt = pick('#cs-outpt');
+  return {
+    client: { name: $('#cs-name').value.trim(), age: $('#cs-age').value.trim(), gender: pick('#cs-gender') || '' },
+    situation: {
+      tags: t, text: $('#cs-text').value.trim(),
+      days: t.includes('住院') ? $('#cs-days').value : '',
+      surgery: t.includes('手術') ? $('#cs-surgery').value.trim() : '',
+      outpatient: t.includes('手術') && outpt != null ? outpt === '1' : null,
+      selfPay: $('#cs-selfpay').value, date: $('#cs-date').value,
+    },
+  };
+}
+
+$('#cs-next').onclick = () => {
+  const c = readCase();
+  if (!c.situation.tags.length && !c.situation.text) return toast('先選擇狀況，或寫下客戶怎麼說');
+  Object.assign(S.claim, c);
+  openPolicies(true);
+};
+
+// ② 客戶的保單
+let policyDocs = [];
+async function openPolicies(fresh) {
+  try { policyDocs = (await api('/doc/list', { kind: 'policy' })).docs; }
+  catch (e) { if (e.auth) return logout(e.message); return toast(e.message); }
+  // 存著的客戶可能指到已經刪掉的條款
+  const ids = new Set(policyDocs.map(d => d.id));
+  S.claim.policies = S.claim.policies.filter(p => ids.has(p.docId));
+  if (fresh) {
+    const name = S.claim.client.name;
+    $('#cp-remember').disabled = !name;
+    $('#cp-remember').checked = !!name;
+  }
+  renderPolicies();
+  show('cp');
+}
+
+function renderPolicies() {
+  const b = $('#cp-list');
+  b.innerHTML = '';
+  if (!policyDocs.length) b.append(el('p', 'upl', '還沒有保單條款，先上傳一份吧。'));
+  for (const d of policyDocs) {
+    const sel = S.claim.policies.find(p => p.docId === d.id);
+    const row = el('div', 'card sm pol' + (sel ? ' on' : ''));
+    const head = el('label', 'inline pol-h');
+    const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!sel;
+    head.append(cb, el('b', null, d.title || d.name));
+    row.append(head);
+    if (sel) {
+      const plan = el('input'); plan.type = 'text'; plan.value = sel.plan || '';
+      plan.placeholder = '例如：計劃 2、日額 2,000、保額 100 萬';
+      plan.oninput = () => { sel.plan = plan.value; };
+      const start = el('input'); start.type = 'date'; start.value = sel.start || '';
+      start.onchange = () => { sel.start = start.value; };
+      row.append(el('p', 'lbl', '投保計劃／保額'), plan, el('p', 'lbl', '契約生效日（選填）'), start);
+    }
+    cb.onchange = () => {
+      if (cb.checked) {
+        if (S.claim.policies.length >= MAX_POL) { cb.checked = false; return toast(`一次最多分析 ${MAX_POL} 張保單`); }
+        S.claim.policies.push({ docId: d.id, plan: '', start: '' });
+      } else S.claim.policies = S.claim.policies.filter(p => p.docId !== d.id);
+      renderPolicies();
+    };
+    b.append(row);
+  }
+}
+
+$('#cp-back').onclick = () => show('cs');
+$('#cp-upload').onclick = () => { S.uploadTo = 'cp'; $('#f-file').click(); };
+$('#cp-go').onclick = () => {
+  if (!S.claim.policies.length) return toast('請勾選至少一張客戶的保單');
+  storeClient(S.claim.client.name, S.claim.policies, $('#cp-remember').checked);
+  runClaim();
+};
+
+// ③ 分析
+async function runClaim() {
+  const c = S.claim;
+  busy(`正在對照 ${c.policies.length} 張保單的條款…\n通常需要 10～30 秒`);
+  try {
+    c.result = await api('/claim/case', { client: c.client, situation: c.situation, extra: c.extra, policies: c.policies });
+    renderClaimResult();
+    show('claim');
+    return true;
+  } catch (e) {
+    if (e.auth) return logout(e.message);
+    toast(e.message, 5000);
+    show(c.result ? 'claim' : 'cp');
+    return false;
+  }
+}
+
+function renderClaimResult() {
+  const r = S.claim.result, b = $('#c-log');
+  b.innerHTML = '';
+
+  const c0 = card('我理解的狀況', el('p', null, r.understanding || S.claim.situation.text || S.claim.situation.tags.join('、')));
+  if (S.claim.extra.length) c0.append(el('p', 'lbl', '補充'), list(S.claim.extra));
+  b.append(c0);
+
+  const c1 = el('div', 'card key');
+  c1.append(el('h4', null, '初步試算合計'), el('p', 'big', r.total ? `約 ${fmt(r.total)} 元` : '目前算不出金額'));
+  if (r.uncounted) {
+    const noPlan = S.claim.policies.some(p => !p.plan?.trim());
+    c1.append(el('p', 'note', `另有 ${r.uncounted} 個項目沒有算進合計（金額待確認，或把握不高）。`
+      + (noPlan ? '回上一步填上投保計劃／保額，可以算得更完整。' : '')));
+  }
+  b.append(c1);
+
+  if (r.reply) {
+    const c = el('div', 'card');
+    c.append(el('h4', null, '📞 可以這樣回覆客戶'), el('p', null, r.reply));
+    const cp = el('button', 'btn sm', '複製');
+    cp.onclick = async () => {
+      try { await navigator.clipboard.writeText(r.reply); toast('已複製，可以貼到 LINE'); }
+      catch { toast('這個瀏覽器不支援複製，請長按文字選取'); }
+    };
+    c.append(cp);
+    b.append(c);
+  }
+
+  for (const p of r.policies) {
+    const c = el('div', 'card');
+    c.append(el('h4', null, p.title));
+    if (p.plan) c.append(el('p', 'muted', '投保計劃／保額：' + p.plan));
+    if (p.error) {
+      c.append(el('p', 'ev', '這張保單這次分析失敗。可以在下面輸入框補充任何內容後送出，會再分析一次。'));
+      b.append(c); continue;
+    }
+    if (!p.likely.length) c.append(el('p', 'ev', '依這張條款，目前判斷不到符合的給付項目。'));
+    for (const x of p.likely) {
       const w = el('div', 'pt');
-      const t = el('b'); t.append(document.createTextNode(x.item || ''));
-      if (x.confidence) { const g = el('span', 'tag ' + x.confidence, { high: '把握高', medium: '需確認', low: '不確定' }[x.confidence] || x.confidence); t.append(g); }
-      w.append(t);
-      if (x.amount) w.append(el('p', null, '給付：' + x.amount));
+      const t = el('b', null, x.item);
+      t.append(el('span', 'tag ' + x.confidence, { high: '把握高', medium: '需確認', low: '不確定' }[x.confidence]));
+      w.append(t, el('p', x.amount != null ? 'amt' : 'ev', x.amount != null ? `初步試算：約 ${fmt(x.amount)} 元` : '金額：待確認'));
+      if (x.amount_text) w.append(el('p', 'ev', '給付方式：' + x.amount_text));
       if (x.why) w.append(el('p', 'ev', x.why));
       if (x.source) w.append(el('p', 'ev', '依據：' + x.source));
-      m.append(w);
+      c.append(w);
     }
-  } else m.append(el('h5', null, '可能可以申請'), el('p', 'ev', '依這份條款，目前判斷不到符合的給付項目。'));
-
-  if (d.unlikely?.length) {
-    m.append(el('h5', null, '可能不賠或有爭議'));
-    m.append(list(d.unlikely.map(x => `${x.item}：${x.why}`)));
+    if (p.unlikely.length) c.append(el('p', 'lbl', '可能不賠或有爭議'), list(p.unlikely.map(x => `${x.item}：${x.why}`)));
+    if (!p.grounded) c.append(el('p', 'note', '（這張只依摘要判斷，沒有回頭比對條款原文）'));
+    b.append(c);
   }
-  if (d.need_to_confirm?.length) { m.append(el('h5', null, '還需要確認')); m.append(list(d.need_to_confirm)); }
-  if (d.next_steps?.length) { m.append(el('h5', null, '建議的下一步')); m.append(list(d.next_steps)); }
-  m.append(el('p', 'dim', '⚠️ ' + (d.disclaimer || '') + (d.grounded ? '' : '（本次僅依摘要判斷，未回頭比對原文）')));
-  return m;
+
+  if (r.need_to_confirm.length) b.append(card('還需要問客戶', list(r.need_to_confirm), el('p', 'note', '問到答案後，在下面輸入框補充，會重新分析。')));
+  if (r.documents.length) b.append(card('要準備的文件', list(r.documents)));
+  b.append(el('p', 'note', '⚠️ ' + r.disclaimer));
+  b.scrollTop = 0;
 }
 
+$('#c-edit').onclick = () => show('cs');
 $('#c-send').onclick = async () => {
   const q = $('#c-text').value.trim();
   if (!q || S.busy) return;
-  $('#c-text').value = '';
-  S.busy = true;
-  push('#c-log', 'user', q);
-  const th = el('div', 'msg coach'); th.textContent = '查詢條款中…';
-  $('#c-log').append(th); $('#c-log').scrollTop = 1e9;
-  try {
-    const d = await api('/claim/ask', { docId: S.doc.id, question: q, history: S.claimHistory.map(h => ({ role: h.role, text: h.role === 'user' ? h.text : JSON.stringify(h.data).slice(0, 600) })) });
-    th.replaceWith(claimCard(d));
-    S.claimHistory.push({ role: 'user', text: q }, { role: 'ai', data: d });
-  } catch (e) { th.textContent = '查詢失敗：' + e.message; }
-  S.busy = false; $('#c-log').scrollTop = 1e9;
+  S.claim.extra.push(q);
+  if (await runClaim()) $('#c-text').value = '';
+  else S.claim.extra.pop();               // 失敗就不要留下這筆補充，使用者可以直接再按一次
 };
 $('#c-text').addEventListener('keydown', e => { if (e.key === 'Enter') $('#c-send').click(); });
 

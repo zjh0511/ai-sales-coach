@@ -497,6 +497,86 @@ if (run(1)) {
     SE.dropSession(s.id);
     await KB.deleteDoc('zzlesson');
   }
+  // ── 理賠諮詢：客戶的狀況＋多張保單（D041）──────────────────────
+  // 金額由程式算；一張保單失敗不拖垮其他張；回覆話術一定要有「以核定為準」。
+  console.log('');
+  console.log('=== 1o. 理賠諮詢：多張保單與金額試算 ===');
+  {
+    const c = AD.calcAmount;
+    ok(c({ type: 'fixed', base: 2000, multiple: 1, qty: 5 }) === 10000, '定額：日額 2,000 × 5 天 = 10,000');
+    ok(c({ type: 'fixed', base: 1000, multiple: 2, qty: 40, cap: 30000 }) === 30000, '定額：超過上限時取上限');
+    ok(c({ type: 'fixed', base: '1,000', multiple: '2', qty: '3' }) === 6000, '數字寫成字串（含千分位）也能算');
+    ok(c({ type: 'fixed', base: 500000 }) === 500000, '一次性給付：沒給倍數與次數欄位就當 1');
+    ok(c({ type: 'fixed', base: 1000, multiple: null, qty: 1 }) === null, '倍數明確寫 null（要查表但沒有表）→ 不算，不當成 1');
+    ok(c({ type: 'fixed', base: 1000, multiple: 1, qty: null }) === null, '天數不知道（null）→ 不算');
+    ok(c({ type: 'fixed', base: null, multiple: 2, qty: 5 }) === null, '缺每單位金額（沒填保額）→ 不硬算');
+    ok(c({ type: 'fixed', base: 1000, multiple: 0, qty: 5 }) === null, '倍數為 0 → 不算（避免顯示 0 元）');
+    ok(c({ type: 'reimburse', actual: 80000, cap: 150000 }) === 80000, '實支實付：實際支出低於上限 → 賠實際支出');
+    ok(c({ type: 'reimburse', actual: 200000, cap: 150000 }) === 150000, '實支實付：超過上限 → 賠上限');
+    ok(c({ type: 'reimburse', actual: 80000, cap: null }) === null, '實支實付不知道上限 → 不試算（不把全部自費當可賠金額）');
+    ok(c({ type: 'fixed', base: -5, qty: 2 }) === null && c(null) === null && c('abc') === null, '不合理的輸入 → null');
+
+    ok(/第 10 天/.test(AD.gapText('2026-01-01', '2026-01-11')), '生效日到發病日的天數由程式算');
+    ok(/早於/.test(AD.gapText('2026-02-01', '2026-01-20')), '發病日早於生效日 → 提示可能是投保前的狀況');
+    ok(AD.gapText('', '2026-01-01') === '' && AD.gapText('2026-01-01', '') === '', '缺日期就不提');
+
+    const ct = AD.caseText({
+      client: { name: '王大哥', age: '52', gender: '男' },
+      situation: { tags: ['住院', '手術'], text: '騎車摔倒骨折', days: '5', surgery: '骨折復位', outpatient: false, selfPay: '80000', date: '2026-09-20' },
+      extra: ['醫生說要用自費骨材'],
+    });
+    ok(/王大哥，52 歲，男/.test(ct) && /住院天數：5 天/.test(ct) && /住院中手術/.test(ct) && /80,000/.test(ct) && /補充：醫生說要用自費骨材/.test(ct),
+      '表單欄位整理成狀況描述', ct.replace(/\n/g, '｜'));
+    ok(!/住院天數|手術：|自費/.test(AD.caseText({ situation: { text: '感冒看門診' } })), '沒填的欄位不出現');
+
+    // 端到端（假模型）：兩張保單平行分析，一張失敗
+    const { putDoc } = await import('../docs/engine/store.js');
+    await putDoc({ id: 'zzpolA', name: 'a.txt', kind: 'policy', title: '住院日額附約', at: 1, text: '第七條 每日病房費用', digest: { benefits: [] } });
+    await putDoc({ id: 'zzpolB', name: 'b.txt', kind: 'policy', title: '癌症險', at: 2, text: '第三條 癌症', digest: { benefits: [] } });
+    const prompts = [];
+    const gw = { supportsFile: true, generate: async (text, opts) => {
+      prompts.push({ text, tier: opts?.tier });
+      if (/住院日額附約】/.test(text) || /【這張保單】住院日額附約/.test(text)) {
+        return { text: JSON.stringify({
+          likely: [
+            { item: '每日病房費用', confidence: 'high', calc: { type: 'fixed', base: 2000, multiple: 1, qty: 5 }, amount_text: '實際住院日數 × 保險金額' },
+            { item: '手術費用', confidence: 'medium', calc: { type: 'fixed', base: null, multiple: 3, qty: 1 } },
+            { item: '加護病房', confidence: 'low', calc: { type: 'fixed', base: 2000, multiple: 2, qty: 1 } },
+          ],
+          unlikely: [], need_to_confirm: ['請問手術是住院中做的嗎？'], documents: ['診斷證明書', '住院證明'],
+        }), ms: 1, model: 'fake' };
+      }
+      if (/【這張保單】癌症險/.test(text)) throw new Error('429 額度用盡');
+      return { text: JSON.stringify({ understanding: '王大哥騎車骨折住院 5 天', reply: '王大哥，先祝您早日康復。初步看您的住院日額附約，病房費用大約可以申請 10,000 元。' }), ms: 1, model: 'fake' };
+    } };
+    const docA = await KB.getDoc('zzpolA'), docB = await KB.getDoc('zzpolB');
+    const r = await AD.claimCase(gw, {
+      client: { name: '王大哥' }, situation: { tags: ['住院'], text: '騎車骨折', days: '5', date: '2026-09-20' },
+      policies: [{ doc: docA, plan: '日額 2,000', start: '2026-01-01' }, { doc: docB, plan: '' }],
+    });
+    ok(r.policies.length === 2 && r.policies[1].error === true && r.policies[0].likely.length === 3, '一張保單失敗，其他張照常給結果');
+    ok(r.policies[0].likely[0].amount === 10000 && r.policies[0].likely[1].amount === null, '每一項的金額是程式算的');
+    ok(r.total === 10000, '合計只加有試算金額、且不是「不確定」的項目', String(r.total));
+    ok(r.uncounted === 2, '沒算進合計的項目數（待確認 1＋不確定 1）', String(r.uncounted));
+    ok(/核定為準/.test(r.reply), '回覆話術沒提到核定時，程式補上「以保險公司核定為準」');
+    const pA = prompts.find(p => /【這張保單】住院日額附約/.test(p.text));
+    ok(/日額 2,000/.test(pA.text) && /第 262 天/.test(pA.text) && /癌症險/.test(pA.text), '每張保單的提示帶入保額、等待期天數、客戶的其他保單');
+    ok(/第七條/.test(pA.text) && !/第三條 癌症/.test(pA.text), '每張保單只帶自己的條款原文');
+    const pR = prompts.find(p => /可以直接照著講的回覆/.test(p.text));
+    ok(pR && /約 10,000 元/.test(pR.text) && /分析失敗/.test(pR.text), '回覆話術只拿到程式算好的金額，也知道哪一張還沒結果');
+    ok(r.need_to_confirm.length === 1 && r.documents.length === 2, '還需要確認的事與文件合併去重');
+
+    let threw = '';
+    try { await AD.claimCase(gw, { situation: { text: '住院' }, policies: [{ doc: docB }] }); } catch (e) { threw = e.message; }
+    ok(/429/.test(threw), '全部保單都失敗才往外拋錯（讓畫面顯示原因）', threw);
+    threw = '';
+    try { await AD.claimCase(gw, { situation: {}, policies: [{ doc: docA }] }); } catch (e) { threw = e.message; }
+    ok(/請描述/.test(threw), '沒有任何狀況 → 請使用者先描述');
+    threw = '';
+    try { await AD.claimCase(gw, { situation: { text: 'x' }, policies: [] }); } catch (e) { threw = e.message; }
+    ok(/請先選擇/.test(threw), '沒選保單 → 請使用者先選');
+    await KB.deleteDoc('zzpolA'); await KB.deleteDoc('zzpolB');
+  }
   // ── 真人語音（Gemini TTS）與內建朗讀的退路 ────────────────────
   // 雲端語音的每一種失敗都必須退回內建朗讀、演練不中斷；
   // 但使用者自己插話打斷的，不能再用內建朗讀把同一句念一次。
@@ -837,23 +917,32 @@ if (run(5)) {
   for (const b of (up.digest.benefits || [])) console.log(`        給付・${b.name}：${b.amount}`);
 
   t0 = t();
-  const a1 = await AD.claimAdvice(gw, doc, {
-    question: '客戶因為急性闌尾炎開刀住院五天，其中在加護病房待了一天，保額是每日一千元，可以申請什麼？',
-    history: [],
+  const a1 = await AD.claimCase(gw, {
+    client: { name: '陳小姐', age: '38', gender: '女' },
+    situation: { tags: ['住院', '手術'], text: '急性闌尾炎開刀，其中在加護病房待了一天', days: '5', surgery: '闌尾切除術', outpatient: false },
+    policies: [{ doc, plan: '保險金額（日額）1,000 元', start: '' }],
   });
   perf.claim = t() - t0;
-  ok(a1.likely?.length >= 2, `判斷出 ${a1.likely?.length} 個可申請項目 ${perf.claim}ms`);
-  for (const x of a1.likely) console.log(`        可申請・${x.item}（${x.confidence}）：${x.amount}`);
-  ok(a1.likely.some(x => /病房|住院日/.test(x.item)), '有抓到每日病房費用');
-  ok(a1.likely.some(x => /手術/.test(x.item)), '有抓到手術費用');
-  ok(!!a1.disclaimer, '有附上免責聲明');
-  ok(a1.grounded, '判斷時有回頭比對條款原文');
+  const p1 = a1.policies[0];
+  ok(!p1.error && p1.likely.length >= 2, `判斷出 ${p1.likely.length} 個可申請項目 ${perf.claim}ms`);
+  for (const x of p1.likely) console.log(`        可申請・${x.item}（${x.confidence}）：${x.amount != null ? x.amount + ' 元' : x.amount_text}`);
+  ok(p1.likely.some(x => /病房|住院日/.test(x.item)), '有抓到每日病房費用');
+  ok(p1.likely.some(x => /手術/.test(x.item)), '有抓到手術費用');
+  ok(p1.likely.some(x => /病房/.test(x.item) && !/加護/.test(x.item) && x.amount === 5000), '病房費用由程式算出 1,000 × 5 天 = 5,000',
+    p1.likely.map(x => `${x.item}=${x.amount}`).join('、'));
+  ok(!p1.likely.some(x => /手術/.test(x.item) && x.amount != null), '條款沒附手術倍數表 → 手術費用不自己編金額');
+  ok(a1.reply.length > 50 && /核定|為準/.test(a1.reply), '有可以直接回覆客戶的話術，且沒有承諾一定會賠');
+  console.log(`        回覆客戶：${a1.reply.slice(0, 160)}…`);
+  ok(p1.grounded, '判斷時有回頭比對條款原文');
 
   // 條款沒寫的東西不能亂編（Knowledge Grounding，規格 §59）
-  const a2 = await AD.claimAdvice(gw, doc, { question: '客戶做了雷射近視手術，這個賠嗎？', history: [] });
-  const txt = JSON.stringify(a2);
-  ok(/美容|除外|不賠|不負給付|查不到|未載明/.test(txt), '對除外／未載明項目不亂賠');
-  console.log(`        近視雷射：${(a2.unlikely?.[0]?.why || a2.likely?.[0]?.why || '').slice(0, 80)}`);
+  const a2 = await AD.claimCase(gw, {
+    situation: { tags: ['手術', '門診'], text: '客戶做了雷射近視手術，想問這個賠不賠', outpatient: true },
+    policies: [{ doc, plan: '' }],
+  });
+  const txt = JSON.stringify(a2.policies[0]);
+  ok(/美容|除外|不賠|不負給付|查不到|未載明|住院/.test(txt) && !a2.total, '對除外／條款沒寫的項目不亂賠');
+  console.log(`        近視雷射：${(a2.policies[0].unlikely?.[0]?.why || a2.policies[0].likely?.[0]?.why || '').slice(0, 80)}`);
 
   await KB.deleteDoc(doc.id);
   ok(!await KB.getDoc(doc.id), '測試用條款已刪除');
