@@ -359,11 +359,25 @@
 <!-- 功能六：行銷諮詢 -->
 <section id="s-chat" class="screen">
   <header class="bar"><button class="back" data-go="home">‹</button><span>問問其他問題</span><span class="spacer"></span><button class="end" id="chat-clear">清除</button></header>
+  <div class="vpick">
+    <span>教練聲音</span>
+    <div class="chips" id="ch-coach"><button class="chip" data-v="男">男聲・沉穩</button><button class="chip" data-v="女">女聲・溫暖</button></div>
+  </div>
   <div id="ch-log" class="log scroll"></div>
   <div class="foot">
     <div class="alt">
       <input id="ch-text" type="text" placeholder="說說你遇到的客戶狀況…" autocomplete="off">
       <button class="btn sm" id="ch-send">送出</button>
+      <button class="btn sm vbtn" id="ch-voice" aria-label="用講的">🎙️</button>
+    </div>
+    <!-- 語音對談：像 ChatGPT 的語音模式，來回對話不用一直按；說的話都會留成文字 -->
+    <div class="vbar">
+      <p id="ch-status" class="status"></p>
+      <div class="vrow">
+        <button class="btn sm" id="ch-kb">⌨️ 打字</button>
+        <button class="mic" id="ch-mic" aria-label="麥克風"><span>🎙️</span></button>
+        <button class="btn sm" id="ch-done">講完了</button>
+      </div>
     </div>
   </div>
 </section>

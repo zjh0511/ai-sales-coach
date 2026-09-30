@@ -214,3 +214,17 @@ label.inline input[type=checkbox]{width:26px;height:26px;flex:none;accent-color:
 .big{font-size:36px;font-weight:700;margin:4px 0!important}
 .amt{color:var(--ok);font-weight:700}
 .pt .tag{font-size:16.5px;border-radius:4px;padding:1px 6px;margin-left:8px;font-weight:400;vertical-align:middle}
+
+/* 問問其他問題：語音對談 */
+.vpick{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--line);font-size:19.5px;color:var(--muted)}
+.vpick .chip{padding:5px 12px;font-size:19.5px}
+.vbtn{flex:none}
+#s-chat .vbar{display:none}
+#s-chat.voice .vbar{display:block}
+#s-chat.voice .alt{display:none}
+.vrow{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.vrow .btn.sm{flex:1;padding:12px 6px;white-space:nowrap}
+.vrow .mic{flex:none}
+.msg.user.spoken::before{content:"🎙️ ";font-size:.85em}
+.msg .say{display:block;margin:6px 0 0 auto;background:none;border:1px solid var(--line);border-radius:999px;
+  color:var(--muted);font:inherit;font-size:18px;padding:2px 12px}

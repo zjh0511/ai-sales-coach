@@ -270,7 +270,7 @@ export class Voice {
     const restore = () => { try { if (session) session.type = prevType || 'auto'; } catch { /* ignore */ } };
 
     try {
-      for await (const chunk of this.cloud.stream(text, hint.gender, ac.signal)) {
+      for await (const chunk of this.cloud.stream(text, hint.gender, ac.signal, hint)) {
         if (tok !== this.speakTok) break;
         rate = chunk.rate;
         const f32 = new Float32Array(chunk.pcm.length);

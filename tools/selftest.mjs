@@ -577,6 +577,24 @@ if (run(1)) {
     ok(/請先選擇/.test(threw), '沒選保單 → 請使用者先選');
     await KB.deleteDoc('zzpolA'); await KB.deleteDoc('zzpolB');
   }
+  // ── 問問其他問題：語音對談（D042）──────────────────────────────
+  // 語音模式要換成「講話」的回答方式；教練的聲音和演練客戶分開。
+  console.log('');
+  console.log('=== 1p. 問問其他問題：語音對談 ===');
+  {
+    const TTS = await import('../docs/engine/tts.js');
+    ok(TTS.COACH_VOICES['男'] === 'Sadaltager' && TTS.COACH_VOICES['女'] === 'Sulafat', '教練聲音：男 Sadaltager、女 Sulafat（使用者試聽後選的）');
+    ok(!Object.values(TTS.COACH_VOICES).some(v => Object.values(TTS.VOICES).includes(v)), '教練聲音和演練客戶的聲音不重複，一聽就知道是誰');
+
+    let sys = '', hist = null;
+    const gw = { generate: async (text, opts) => { sys = opts.system; hist = opts.history; return { text: '好的，我們一起想。', ms: 1, model: 'fake' }; } };
+    await AD.coachChat(gw, { history: [], message: '客戶說要考慮', voice: true });
+    ok(sys.includes(P.COACH_CHAT) && sys.includes('語音對談') && /120 字/.test(sys), '語音模式：在教練設定後面加上「講話」的規則（短、不條列）');
+    await AD.coachChat(gw, { history: [], message: '客戶說要考慮' });
+    ok(sys === P.COACH_CHAT, '打字模式：教練設定不變');
+    await AD.coachChat(gw, { history: [{ role: 'user', text: 'a', voice: 1 }, { role: 'ai', text: 'b' }], message: 'c', voice: true });
+    ok(hist.length === 2 && hist.every(h => Object.keys(h).join() === 'role,text'), '對話紀錄裡「用講的」標記不會送給模型，只送角色與內容');
+  }
   // ── 真人語音（Gemini TTS）與內建朗讀的退路 ────────────────────
   // 雲端語音的每一種失敗都必須退回內建朗讀、演練不中斷；
   // 但使用者自己插話打斷的，不能再用內建朗讀把同一句念一次。
@@ -652,6 +670,13 @@ if (run(1)) {
     ok(at.length >= 2 && Math.max(...gaps) < 0.002, '每段聲音前後剛好接上，沒有縫', `${at.length} 段，最大間隙 ${(Math.max(...gaps) * 1000).toFixed(2)}ms`);
     ok(session.history[0] === 'playback' && session.history.at(-1) === 'auto',
       'iOS 播放期間切成媒體播放（靜音開關打開也聽得到），播完切回', session.history.join(' → '));
+
+    // 指定聲線（「問問其他問題」的教練）要一路傳到雲端語音
+    reset();
+    let gotHint = null;
+    v.cloud = { async *stream(t, g, signal, hint) { streamCalls++; gotHint = hint; yield { pcm: pcm(1200), rate: 24000 }; } };
+    await v.speak('我們一起想想看。', { cloudVoice: 'Sulafat' });
+    ok(gotHint?.cloudVoice === 'Sulafat', '指定的聲線（教練）會傳到雲端語音', JSON.stringify(gotHint));
 
     // 2) 還沒出聲就失敗：退回內建朗讀，並告訴畫面
     reset();
@@ -961,6 +986,15 @@ if (run(6)) {
     history: [{ role: 'user', text: '客戶說要跟老婆商量' }, { role: 'ai', text: c1.reply }],
     message: '那我直接退一部分佣金給他當作誠意，他應該就會簽了吧？',
   });
+  // 語音對談：回答會直接唸出來，要短、不條列
+  t0 = t();
+  const cv = await AD.coachChat(gw, { history: [], message: '客戶說要跟老婆商量，結果就已讀不回三個禮拜了，我該怎麼跟進比較好？', voice: true });
+  perf.chatVoice = t() - t0;
+  const vlen = cv.reply.replace(/\s/g, '').length;
+  ok(vlen <= 180, `語音模式回答夠短，約 ${vlen} 字（打字模式 ${c1.reply.replace(/\s/g, '').length} 字）${perf.chatVoice}ms`);
+  ok(!/^\s*([-*・•]|\d+[.、）)])/m.test(cv.reply), '語音模式沒有條列或編號');
+  console.log(`        語音：${cv.reply}`);
+
   ok(!!c2.compliance, '偵測到退佣違規');
   ok(/退佣|違規|不可|不能|不得/.test(c2.reply), '教練有直接指出違規風險');
   console.log(`        ${c2.reply.slice(0, 200)}…`);

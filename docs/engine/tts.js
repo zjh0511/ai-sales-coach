@@ -21,6 +21,10 @@ export const TTS_MODEL = 'gemini-3.8-flash-lite-tts';
 export const VOICES = { 男: 'Charon', 女: 'Aoede' };
 export const voiceFor = gender => VOICES[gender] || VOICES['男'];
 
+// 「問問其他問題」教練的聲音，刻意和演練客戶不同，一聽就知道是誰在講話。
+// 使用者試聽五個樣本後留下這兩個，讓學員自己選（2026-09-30）。
+export const COACH_VOICES = { 男: 'Sadaltager', 女: 'Sulafat' };
+
 const CR = String.fromCharCode(13);
 const LF = String.fromCharCode(10);
 

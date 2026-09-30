@@ -164,7 +164,7 @@ export async function claimCase(gw, { client = {}, situation = {}, extra = [], p
 }
 
 // ── 功能六：行銷諮詢對話 ────────────────────────────────────────
-export async function coachChat(gw, { history, message }) {
+export async function coachChat(gw, { history, message, voice = false }) {
   const c = checkCompliance(message);
 
   // 中性的多輪格式，由各家 adapter 自行轉換；只留最近 12 則
@@ -177,7 +177,8 @@ export async function coachChat(gw, { history, message }) {
     : '';
 
   const r = await gw.generate(message + note, {
-    system: P.COACH_CHAT, history: hist, temp: 0.85, max: 4000, tier: 'fast', noThink: true,
+    system: voice ? `${P.COACH_CHAT}\n\n${P.COACH_VOICE}` : P.COACH_CHAT,
+    history: hist, temp: 0.85, max: 4000, tier: 'fast', noThink: true,
   });
 
   return {
