@@ -4,6 +4,9 @@
   --st:env(safe-area-inset-top); --sb:env(safe-area-inset-bottom);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* hidden 一定要真的藏起來。.btn.install 設了 display:flex，會蓋過瀏覽器預設的 [hidden]，
+   結果從桌面圖示打開時「先加到主畫面」還在（截圖教學手冊時發現）*/
+[hidden]{display:none!important}
 html,body{height:100%;margin:0}
 body{
   background:var(--bg);color:var(--fg);overscroll-behavior:none;

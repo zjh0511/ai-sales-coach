@@ -1484,3 +1484,28 @@ iOS 上多開 AudioContext 或辨識器容易互相卡住，所以 callback 依�
 
 **驗證**（瀏覽器模擬）：Android 第一次打開會跳、重新整理不再跳、模擬系統安裝事件時「立即安裝」叫得出安裝視窗、
 假裝 iPhone 會跳分享鍵的三個步驟、假裝從桌面圖示打開不跳（而且不會把「已看過」記下來）。
+
+---
+
+## 2026-09-30｜D046 製作使用教學手冊（PPT）；順手修掉「從桌面打開仍顯示加到主畫面」
+
+使用者要一份每個步驟都有截圖的教學手冊（PPT 檔）。
+
+**截圖方式**：用 headless Edge 以 DevTools Protocol 直接操控（Node 內建 WebSocket，不裝套件），
+模擬 iPhone（390×844、2 倍解析度、iPhone 的 User-Agent）。所有 AI 回應都是事先寫好的範例（注入頁面的假 fetch），
+**不花使用者的額度、每次結果一樣**；帳號也是範例帳號，不連 Firebase。
+API 金鑰申請的 9 步沿用使用者的 iPhone 實拍截圖（D044，金鑰已遮蔽）。
+
+**截圖時踩到的，順便記下來**
+- 這台電腦的 Edge 裝了 Calendly 擴充功能，會在頁面右上角塞一顆按鈕 → 啟動時加 `--disable-extensions`。
+- headless Edge 會送 Chrome 的安裝事件，教學會變成 Android 的「立即安裝」→ 截圖環境擋掉，才是 iPhone 真實的樣子。
+- 注入腳本在文件最前面執行時 `document.documentElement` 還不存在，對它做 `observe` 會丟錯、讓後面的假 fetch 都沒裝上
+  （結果請求真的送到 Google——帶的是假的測試金鑰，被拒絕，沒有任何真實資料外流）。
+
+**找到的真 Bug**：`.btn.install{display:flex}` 蓋過了瀏覽器預設的 `[hidden]`，
+所以**從桌面圖示打開時，登入畫面仍然顯示「先加到主畫面」**——程式有把它設成 hidden，CSS 又把它顯示回來。
+加上全域 `[hidden]{display:none!important}`。這個問題在真機上也存在，只是使用者沒注意到。
+
+**手冊**：35 頁（封面、目錄、開始之前、四個章節、封底），深藍＋亮藍、點綴豪老師的粉橘色；
+截圖一律放在手機框裡、旁邊編號步驟。文字標成 `zh-TW`，PowerPoint 才會用中文斷行規則（句號不會跑到行首）。
+用本機 PowerPoint 匯出每一頁圖片逐頁檢查過。
