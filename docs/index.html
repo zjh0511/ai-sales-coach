@@ -113,7 +113,9 @@
 
 <!-- 首次啟動：合規提醒 -->
 <section id="s-welcome" class="screen">
-  <div class="pad">
+  <!-- 一定要 scroll：字放大、加了主視覺之後，內容比 iPhone 螢幕高，
+       沒有 scroll 會把「我了解」擠到畫面外，新使用者就進不去（使用者實機回報）-->
+  <div class="pad scroll">
     <div class="brand-hero">
       <img class="brand-visual" src="icons/brand-hao.jpg" alt="豪老師 Hao+｜AI賦能 x 個人成長 x 潛能啟發" width="567" height="567">
       <h1 class="brand">AI業務教練</h1>
