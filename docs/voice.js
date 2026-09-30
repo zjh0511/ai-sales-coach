@@ -208,7 +208,15 @@ export class Voice {
   _cloudFailed(e) {
     const m = String(e?.message || e);
     this.cloudFails = (this.cloudFails || 0) + 1;
-    const off = /\b429\b|quota|RESOURCE_EXHAUSTED/i.test(m) ? 10 * 60 * 1000   // 額度用完
+    // 呼叫端（輪流用三個語音模型）已經算好最快什麼時候有模型恢復：照它的時間，
+    // 不要自己猜。原本一律冷卻 10 分鐘——Google 每分鐘的限制幾十秒就恢復，
+    // 學員卻要聽 10 分鐘的機械聲（使用者實測回報，2026-09-30）。
+    if (e?.retryAt) {
+      this.cloudOffUntil = e.retryAt;
+      this.onState?.(e.quota === 'day' ? 'tts-quota-day' : 'tts-fallback');
+      return;
+    }
+    const off =/\b429\b|quota|RESOURCE_EXHAUSTED/i.test(m) ? 10 * 60 * 1000   // 額度用完
       : /\b40[34]\b/.test(m) ? 24 * 60 * 60 * 1000                               // 這把金鑰不能用這個模型
       : this.cloudFails >= 2 ? 3 * 60 * 1000                                     // 連續失敗（塞車、網路）
       : 0;

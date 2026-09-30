@@ -595,6 +595,104 @@ if (run(1)) {
     await AD.coachChat(gw, { history: [{ role: 'user', text: 'a', voice: 1 }, { role: 'ai', text: 'b' }], message: 'c', voice: true });
     ok(hist.length === 2 && hist.every(h => Object.keys(h).join() === 'role,text'), '對話紀錄裡「用講的」標記不會送給模型，只送角色與內容');
   }
+  // ── 真人語音額度：三個模型輪流（D043）────────────────────────────
+  // 使用者實測：兩輪之後變成機械聲，而且一直回不來。原因是免費額度每分鐘 3 句，
+  // 被擋之後又一律冷卻 10 分鐘。改成同一把金鑰三個模型輪流、依 Google 說的時間恢復。
+  console.log('');
+  console.log('=== 1q. 真人語音額度：三個模型輪流 ===');
+  {
+    const TTS = await import('../docs/engine/tts.js');
+    const CRLF = String.fromCharCode(13, 10);
+    const pcmB64 = Buffer.from(new Int16Array([1, 2, 3]).buffer).toString('base64');
+    const okStream = () => new Response(new ReadableStream({ start(c) {
+      c.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/l16; rate=24000', data: pcmB64 } }] } }] }) + CRLF + CRLF));
+      c.close();
+    } }), { status: 200 });
+    // 照 Google 實際回的格式（2026-09-30 用使用者金鑰實測）
+    const quota = (id, delay) => new Response(JSON.stringify({ error: {
+      code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: `Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 3\nPlease retry in ${delay}s.`,
+      details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: id, quotaValue: '3' }] },
+        { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: `${Math.round(delay)}s` }],
+    } }), { status: 429 });
+    const MIN = 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier';
+    const DAY = 'GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+
+    const e1 = TTS.ttsError(429, JSON.parse(await quota(MIN, 12.4).text()).error);
+    ok(e1.quota === 'minute' && e1.retryMs === 12000 && e1.status === 429, '分得出「這一分鐘用完」與要等幾秒', `${e1.quota} ${e1.retryMs}`);
+    const e2 = TTS.ttsError(429, JSON.parse(await quota(DAY, 31).text()).error);
+    ok(e2.quota === 'day', '分得出「今天用完」（只有 details 裡看得到）');
+    ok(TTS.ttsError(503, { message: 'high demand' }).quota === undefined, '塞車不算額度問題');
+
+    // 台灣時間：夏令時間下午 3 點、冬令時間下午 4 點重算
+    const tw = t => new Date(t).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+    const r1 = TTS.nextPacificMidnight(Date.parse('2026-09-30T02:00:00Z'));    // 台灣 9/30 上午 10 點
+    ok(r1 === Date.parse('2026-09-30T07:00:00Z'), '夏令時間：台灣上午 10 點用完 → 當天下午 3 點恢復', tw(r1));
+    const r2 = TTS.nextPacificMidnight(Date.parse('2026-09-30T08:00:00Z'));    // 台灣 9/30 下午 4 點（已過重算時間）
+    ok(r2 === Date.parse('2026-10-01T07:00:00Z'), '台灣下午 4 點才用完 → 隔天下午 3 點恢復', tw(r2));
+    const r3 = TTS.nextPacificMidnight(Date.parse('2026-12-15T02:00:00Z'));
+    ok(r3 === Date.parse('2026-12-15T08:00:00Z'), '冬令時間：下午 4 點恢復', tw(r3));
+
+    const realFetch = globalThis.fetch;
+    let t = 1_000_000;
+    const saved = {};
+    const mk = () => new TtsRotator({ now: () => t, store: { load: () => JSON.parse(JSON.stringify(saved.s || {})), save: s => { saved.s = s; } } });
+    const { TtsRotator } = TTS;
+    const drain = async (rot) => { const out = []; for await (const c of rot.stream('k', '你好', 'Charon')) out.push(c); return out; };
+    let hits = [];
+    try {
+      // 輕量版這一分鐘用完 → 自動換標準版，學員照樣聽到真人聲
+      let rot = mk();
+      globalThis.fetch = async url => { const m = /models\/([^:]+)/.exec(url)[1]; hits.push(m);
+        return m === 'gemini-3.8-flash-lite-tts' ? quota(MIN, 12) : okStream(); };
+      const got = await drain(rot).catch(() => []);
+      ok(got.length === 1 && hits.join() === 'gemini-3.8-flash-lite-tts,gemini-3.8-flash-tts', '輕量版被擋 → 同一句自動換標準版', hits.join(' → '));
+      hits = []; await drain(rot).catch(() => {});
+      ok(hits[0] === 'gemini-3.8-flash-tts', '被擋的模型在 Google 說的時間內不再去撞');
+      t += 14000; hits = []; await drain(rot);
+      ok(hits[0] === 'gemini-3.8-flash-lite-tts', '時間到了自動回到輕量版（不再鎖 10 分鐘）');
+
+      // 今天用完：記在手機裡，重開 App 也不會重撞
+      saved.s = {}; rot = mk();
+      globalThis.fetch = async url => { const m = /models\/([^:]+)/.exec(url)[1]; hits.push(m);
+        return m === 'gemini-3.8-flash-lite-tts' ? quota(DAY, 30) : okStream(); };
+      hits = []; await drain(rot).catch(() => {});
+      const rot2 = mk();                       // 模擬關掉 App 再打開
+      hits = []; await drain(rot2);
+      ok(hits[0] === 'gemini-3.8-flash-tts', '「今天用完」記在手機裡，重開 App 不會重複去撞');
+      t += 31 * 60 * 1000; hits = []; await drain(rot2);
+      ok(hits[0] === 'gemini-3.8-flash-lite-tts', '30 分鐘後再試一次（Google 的「今天用完」實測並不一致，不整天鎖死）');
+
+      // 三個都用完 → 丟出帶「今天用完」與恢復時間的錯誤，畫面才能講清楚
+      saved.s = {}; rot = mk();
+      globalThis.fetch = async () => quota(DAY, 30);
+      let err = null; try { await drain(rot); } catch (e) { err = e; }
+      ok(err?.quota === 'day' && err.retryAt > t && rot.allDayOut(), '三個模型今天都用完 → 告訴畫面「今天用完」');
+      hits = []; globalThis.fetch = async url => { hits.push(url); return okStream(); };
+      err = null; try { await drain(rot); } catch (e) { err = e; }
+      ok(hits.length === 0 && err?.quota === 'day', '都用完之後不再浪費時間去問 Google，直接改用手機聲音');
+
+      // 403：這把金鑰不能用這個模型 → 一天內跳過；網路錯誤 → 不換模型，交給 voice.js
+      saved.s = {}; rot = mk();
+      globalThis.fetch = async url => { const m = /models\/([^:]+)/.exec(url)[1]; hits.push(m);
+        return m === 'gemini-3.8-flash-lite-tts' ? new Response('{"error":{"message":"denied"}}', { status: 403 }) : okStream(); };
+      hits = []; await drain(rot); hits = []; await drain(rot);
+      ok(hits[0] === 'gemini-3.8-flash-tts', '這把金鑰不能用的模型（403）直接跳過');
+      saved.s = {}; rot = mk();
+      globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+      err = null; hits = []; try { await drain(rot); } catch (e) { err = e; }
+      ok(/Failed to fetch/.test(err?.message || '') && !err.retryAt, '網路斷線不換模型（換了也一樣），交給上層處理');
+
+      // 已經開始出聲才斷掉：不換模型重唸，免得同一句聽兩次
+      saved.s = {}; rot = mk(); hits = [];
+      globalThis.fetch = async url => { hits.push(url); return new Response(new ReadableStream({ start(c) {
+        c.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/l16; rate=24000', data: pcmB64 } }] } }] }) + CRLF + CRLF));
+        c.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ error: { code: 429, message: 'quota' } }) + CRLF + CRLF));
+        c.close(); } }), { status: 200 }); };
+      err = null; try { await drain(rot); } catch (e) { err = e; }
+      ok(hits.length === 1 && !!err, '講到一半才出錯：不換模型重唸同一句');
+    } finally { globalThis.fetch = realFetch; }
+  }
   // ── 真人語音（Gemini TTS）與內建朗讀的退路 ────────────────────
   // 雲端語音的每一種失敗都必須退回內建朗讀、演練不中斷；
   // 但使用者自己插話打斷的，不能再用內建朗讀把同一句念一次。
@@ -690,6 +788,18 @@ if (run(1)) {
     await v.speak('一');
     await v.speak('二');
     ok(streamCalls === 1 && said.length === 2, '額度用完：之後直接用內建朗讀，不再每句多等', `雲端呼叫 ${streamCalls} 次`);
+
+    // 3b) 輪流的三個模型都被擋：照它算好的恢復時間，不再一律冷卻 10 分鐘；今天用完要另外通知畫面
+    reset(); v.cloudOffUntil = 0; v.cloudFails = 0;
+    const soon = Date.now() + 15000;
+    v.cloud = { async *stream() { streamCalls++; const e = new Error('tts all models unavailable'); e.quota = 'minute'; e.retryAt = soon; throw e; } };
+    await v.speak('一');
+    ok(v.cloudOffUntil === soon && states.includes('tts-fallback'), '這一分鐘都用完：15 秒後就回到真人語音（不是 10 分鐘）');
+    reset(); v.cloudOffUntil = 0;
+    v.cloud = { async *stream() { const e = new Error('tts all models unavailable'); e.quota = 'day'; e.retryAt = soon; throw e; } };
+    await v.speak('二');
+    ok(states.includes('tts-quota-day') && said.length === 1, '今天都用完：通知畫面講清楚，這句照樣用內建朗讀唸完');
+    reset(); v.cloudOffUntil = 0; v.cloudFails = 0;
 
     // 4) 第一段聲音遲遲不來：時間到就放棄，改用內建
     reset(); v.cloudOffUntil = 0; v.cloudFails = 0;

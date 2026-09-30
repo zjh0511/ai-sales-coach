@@ -1,5 +1,5 @@
 import { Voice, supported, voiceInfo, MIC_AFTER_TTS_MS } from './voice.js';
-import { streamSpeech, voiceFor, COACH_VOICES } from './engine/tts.js';
+import { TtsRotator, nextPacificMidnight, voiceFor, COACH_VOICES } from './engine/tts.js';
 import { api, providers, restore, onModelEvent } from './engine/api.js';
 import { startOpenRouter, oauthSupported } from './engine/oauth.js';
 import * as acct from './engine/account.js';
@@ -692,6 +692,7 @@ const voice = new Voice({
   onState: s => {
     // 真人語音失敗、改用內建朗讀。只提示一次——每句都跳會很煩，
     // 而之後幾句通常也會走內建（有冷卻），使用者知道原因就好。
+    if (s === 'tts-quota-day') return quotaNotice();
     if (s === 'tts-fallback') {
       if (!ttsNotice) { ttsNotice = true; toast('真人語音暫時無法使用，先改用手機內建語音', 3500); }
       return;
@@ -712,14 +713,41 @@ const voice = new Voice({
 // 真人語音（Gemini TTS）：用使用者同一把 Google AI Studio 金鑰。
 // 金鑰每次呼叫時才讀——使用者換金鑰或登出後，不會拿著舊的去呼叫。
 let ttsNotice = false;
+// 同一把金鑰、三個語音模型輪流（免費額度每個模型各自算）。
+// 哪個模型被擋、到什麼時候，記在手機裡，關掉 App 再打開也不會重複去撞。
+const TTSQ_KEY = 'aicoach.ttsq';
+const tts = new TtsRotator({ store: {
+  load: () => JSON.parse(localStorage.getItem(TTSQ_KEY) || '{}'),
+  save: st => localStorage.setItem(TTSQ_KEY, JSON.stringify(st)),
+} });
 voice.cloud = {
   // hint.cloudVoice：指定聲線（教練）；沒有就依性別挑（演練客戶）
   stream: (text, gender, signal, hint) => {
     const { provider, key } = cred();
     if (provider !== 'gemini' || !key) throw new Error('tts no key');
-    return streamSpeech(key, text, hint?.cloudVoice || voiceFor(gender), signal);
+    return tts.stream(key, text, hint?.cloudVoice || voiceFor(gender), signal);
   },
 };
+// 三個語音模型今天的免費額度都用完了。學員突然聽到機械聲，會以為 App 壞了——
+// 所以講清楚原因、幾點恢復，順便教 iPhone 下載好聽一點的內建語音。每天只講一次。
+const QUOTA_NOTICE_KEY = 'aicoach.ttsq.notice';
+function quotaNotice() {
+  const reset = nextPacificMidnight();
+  if (localStorage.getItem(QUOTA_NOTICE_KEY) === String(reset)) return;
+  localStorage.setItem(QUOTA_NOTICE_KEY, String(reset));
+  // 台灣時間下午 3～4 點重算：過了這個時間才用完的話，要等到「明天」
+  const day = new Date(reset).toDateString() === new Date().toDateString() ? '今天' : '明天';
+  const at = new Date(reset).toLocaleTimeString('zh-TW', { hour: 'numeric', minute: '2-digit' });
+  const lead = `Google 免費的真人語音每天有上限，今天的已經用完，<b>${day}${at}會恢復</b>。`
+    + '在那之前 AI 對話照常，只是聲音先改用手機內建的朗讀。';
+  if (!platform().ios) return sheet('今天的免費真人語音用完了', lead, [], { why: false });
+  sheet('今天的免費真人語音用完了', lead + '<br>iPhone 內建的聲音可以免費換成好聽很多的版本：', [
+    ['打開「設定」→「輔助使用」→「朗讀內容」→「聲音」'],
+    ['選「中文（台灣）」→「美佳」，下載<b>加強版</b>', '檔案約一兩百 MB，建議連 Wi-Fi 下載'],
+    ['下載完回到 App，之後的內建聲音就會自然很多'],
+  ], { why: false });
+}
+
 const speakHint = () => ({ ...(S.persona?.voice || {}), gender: S.persona?.gender });
 
 const setStatus = (t, cls = '') => { const n = $('#p-status'); n.textContent = t; n.className = 'status ' + cls; };
@@ -1263,12 +1291,17 @@ $('#ch-coach').addEventListener('click', e => {
   const c = e.target.closest('.chip'); if (!c) return;
   savePrefs({ coach: c.dataset.v });
   renderChat();
-  // 選了就讓他聽一下，比看名字更準
+  // 選了就讓他聽一下，比看名字更準。試聽是事先錄好的音檔，不花學員的語音額度
+  // （免費額度每分鐘只有 3 句，原本試聽一次就用掉三分之一）。
   voice.unlock();
-  CV.ep++; clearTimeout(CV.hold); voice.abortListening();
-  voice.speak('你好，我是你的業務教練。最近有遇到什麼客戶的狀況，想跟我聊聊嗎？', coachHint())
-    .then(() => { if (CV.on) chatListen(); });
+  CV.ep++; clearTimeout(CV.hold); voice.abortListening(); voice.stopSpeaking();
+  previewAudio?.pause();
+  previewAudio = new Audio(`audio/coach-${c.dataset.v === '女' ? 'female' : 'male'}.mp3`);
+  const after = () => { if (CV.on) chatListen(); };
+  previewAudio.onended = after;
+  previewAudio.play().catch(after);
 });
+let previewAudio = null;
 
 // ── 語音對談 ──
 // 問教練常常要描述一整段狀況、邊想邊講。辨識器停頓一下就會結束一句，
@@ -1659,7 +1692,8 @@ const ICON_MORE = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
 const ICON_PLUS = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
   + '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8.5v7M8.5 12h7"/></svg></span>';
 
-function sheet(title, lead, steps) {
+function sheet(title, lead, steps, { why = true } = {}) {
+  $('#sh-why').hidden = !why;                     // 「裝好之後…」那段只屬於加到主畫面
   $('#sh-title').textContent = title;
   $('#sh-lead').innerHTML = lead;
   $('#sh-steps').innerHTML = steps.map((s, i) =>
