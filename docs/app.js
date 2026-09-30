@@ -1659,7 +1659,8 @@ function platform() {
     : /FxiOS/.test(ua) ? 'firefox'
     : /OPiOS|OPT\//.test(ua) ? 'opera'
     : 'safari';
-  return { iPhone, iPad, ios: iPhone || iPad, inApp, browser };
+  const android = /Android/i.test(ua);
+  return { iPhone, iPad, ios: iPhone || iPad, android, inApp, browser };
 }
 
 let installEvent = null;
@@ -1692,8 +1693,12 @@ const ICON_MORE = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
 const ICON_PLUS = '<span class="sh-icon"><svg viewBox="0 0 24 24">'
   + '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8.5v7M8.5 12h7"/></svg></span>';
 
-function sheet(title, lead, steps, { why = true } = {}) {
+// install：顯示「立即安裝」（Android 有系統安裝事件時）；done：顯示「我已經加過了」
+function sheet(title, lead, steps, { why = true, install = false, done = false } = {}) {
   $('#sh-why').hidden = !why;                     // 「裝好之後…」那段只屬於加到主畫面
+  $('#sh-install').hidden = !install;
+  $('#sh-done').hidden = !done;
+  $('#sheet .btn[data-close]').classList.toggle('primary', !install);   // 一次只有一顆藍色主按鈕
   $('#sh-title').textContent = title;
   $('#sh-lead').innerHTML = lead;
   $('#sh-steps').innerHTML = steps.map((s, i) =>
@@ -1705,17 +1710,33 @@ document.querySelectorAll('#sheet [data-close]').forEach(e => {
   e.onclick = () => { $('#sheet').hidden = true; };
 });
 
-document.addEventListener('click', async e => {
-  if (!e.target.closest('[data-install]')) return;
-  const p = platform();
+async function promptInstall() {
+  const ev = installEvent;
+  if (!ev) return;
+  $('#sheet').hidden = true;
+  ev.prompt();
+  const r = await ev.userChoice.catch(() => null);
+  installEvent = null;
+  if (r?.outcome === 'accepted') { toast('已加到主畫面'); syncInstallBtn(); }
+}
+$('#sh-install').onclick = promptInstall;
 
-  // 1) Android／桌面 Chrome：真的可以一鍵安裝
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-install]')) installGuide();
+});
+
+// 安裝教學。按「加到主畫面」按鈕，或第一次用手機瀏覽器打開時自動跳出（auto）。
+async function installGuide({ auto = false } = {}) {
+  const p = platform();
+  const opt = { done: auto };                    // 自動跳出時多一個「我已經加過了」
+
+  // 1) Android／桌面 Chrome：真的可以一鍵安裝。
+  //    按按鈕時直接叫出系統安裝視窗；自動跳出時不行——瀏覽器規定安裝視窗
+  //    只能在使用者按了東西之後才叫得出來，所以先顯示說明，讓他按「立即安裝」。
+  if (installEvent && !auto) return promptInstall();
   if (installEvent) {
-    installEvent.prompt();
-    const r = await installEvent.userChoice.catch(() => null);
-    installEvent = null;
-    if (r?.outcome === 'accepted') { toast('已加到主畫面'); syncInstallBtn(); }
-    return;
+    return sheet('加到主畫面', '把 AI業務教練加到手機桌面，之後點圖示就能開啟，<b>全螢幕、像一般 App 一樣</b>。'
+      + '按下面的「立即安裝」，再按系統跳出的「安裝」就完成了。', [], { ...opt, install: true });
   }
 
   // 2) LINE／FB／IG 的內建瀏覽器：連「加入主畫面」的選項都沒有，
@@ -1726,7 +1747,7 @@ document.addEventListener('click', async e => {
       + '這種瀏覽器<b>沒有</b>「加入主畫面」的功能。先換到系統瀏覽器就可以了。',
       [[`點右上角的${ICON_MORE}`, '有些版本在右下角，圖示是三個點或箭頭'],
        ['選「用 Safari 開啟」或「用其他瀏覽器開啟」', 'Safari 或 Chrome 都可以，Android 選 Chrome'],
-       ['在瀏覽器裡再按一次這顆「加到主畫面」']]);
+       ['在瀏覽器裡再按一次這顆「加到主畫面」']], opt);
   }
 
   // 3) iPhone／iPad：沒有 API 可以自動建立捷徑（Apple 的規定），只能教。
@@ -1751,8 +1772,18 @@ document.addEventListener('click', async e => {
       [STEP1[p.browser],
        ['在選單裡往下滑，找「加入主畫面」',
         `圖示是${ICON_PLUS}，通常要滑過一整排 App 圖示才看得到`],
-       ['右上角按「新增」', '桌面就會出現 AI業務教練 的圖示']]);
+       ['右上角按「新增」', '桌面就會出現 AI業務教練 的圖示']], opt);
   }
+
+  // 4) Android 但瀏覽器沒給安裝事件（還沒準備好，或不是 Chrome）：教選單的位置。
+  //    原本這裡會落到下面的桌面說明，Android 使用者看到的是電腦的操作方式。
+  if (p.android) {
+    return sheet('加到主畫面', '把 AI業務教練加到手機桌面，之後點圖示就能開啟，全螢幕、像一般 App 一樣。',
+      [[`點瀏覽器右上角的 <b>⋮</b>`, 'Chrome、Edge、Samsung 瀏覽器都在右上角或右下角'],
+       ['選「<b>加到主畫面</b>」或「<b>安裝應用程式</b>」'],
+       ['按「安裝」或「新增」', '桌面就會出現 AI業務教練 的圖示']], opt);
+  }
+  if (auto) return;                              // 桌面電腦不自動跳
 
   // 5) 桌面瀏覽器但沒有安裝事件（Firefox、Safari，或已經裝過）
   return sheet('加到桌面',
@@ -1761,7 +1792,23 @@ document.addEventListener('click', async e => {
      ['或從瀏覽器選單找「安裝」／「建立捷徑」'],
      ['macOS 的 Safari 是「檔案 → 加入 Dock」'],
      ['Firefox 桌面版沒有這個功能', '手機上開這個網址會比較順']]);
-});
+}
+
+// 第一次用手機瀏覽器打開：主動教安裝（掃 QR Code 進來的人多半不知道可以這樣做）。
+// 從桌面圖示打開的不跳；每個瀏覽器只自動跳一次，之後需要再按按鈕就好。
+// 注意瀏覽器沒辦法知道「桌面上已經有圖示」——所以有「我已經加過了」可以關。
+const INSTALL_TIP_KEY = 'aicoach.installtip';
+async function autoInstallTip() {
+  if (standalone()) return;
+  const p = platform();
+  if (!(p.ios || p.android || p.inApp)) return;
+  try { if (localStorage.getItem(INSTALL_TIP_KEY)) return; } catch { return; }
+  // Android 的安裝事件通常在載入後一兩秒才來，等一下才知道能不能一鍵安裝
+  for (let i = 0; i < 25 && p.android && !installEvent; i++) await new Promise(r => setTimeout(r, 100));
+  if (standalone() || !$('#sheet').hidden) return;
+  try { localStorage.setItem(INSTALL_TIP_KEY, String(Date.now())); } catch { /* 無痕模式 */ }
+  installGuide({ auto: true });
+}
 
 // 從桌面圖示的「快速動作」進來時直接開對應功能
 function handleShortcut() {
@@ -1791,6 +1838,7 @@ onModelEvent(e => {
 
 async function boot() {
   localStorage.removeItem(LEGACY_SKIP);
+  setTimeout(autoInstallTip, 600);                  // 先讓畫面出來，再跳安裝教學
   // 強制登入：每個使用者都必須有帳號。
   // 判斷依據是本機存的登入狀態，不是連線檢查——沒網路時仍然進得去，
   // 否則一斷線就等於整個 App 被鎖住。

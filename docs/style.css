@@ -196,6 +196,8 @@ a{color:var(--acc)}
 .sh-icon svg{width:19px;height:19px;fill:none;stroke:var(--acc);stroke-width:1.9;
   stroke-linecap:round;stroke-linejoin:round}
 .sheet-box .card.sm{margin:16px 0 14px}
+.sheet-box .btn + .btn{margin-top:10px}
+.sheet-box .link{padding:12px 0 0}
 
 #toast{position:fixed;left:50%;bottom:calc(120px + var(--sb));transform:translateX(-50%);background:#000c;
   border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:21px;opacity:0;
