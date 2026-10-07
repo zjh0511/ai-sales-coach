@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS records (
+  id TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS records_expires ON records(expires);

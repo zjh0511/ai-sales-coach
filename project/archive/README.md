@@ -31,4 +31,8 @@
 | `engine\platform.js` + `engine\shims\` | 平台層：引擎不直接碰 Web API，同一份程式可以在瀏覽器、Node、iOS JavaScriptCore 上跑 |
 | `tests\smoke.mjs` | 驗證平台層和錯誤分類，不需要金鑰 |
 
+## cloudflare\（來自 AI業務教練App：Cloudflare Workers + D1 公開測試版，2026-10-07 保留）
+
+內容見 `cloudflare\README.md`：產品企畫、外部審查報告、後端金鑰加密、法規查核、聲音評分、角色鎖定。
+
 注意：三個專案的決策編號從 D022 開始各自不同，引用時要寫明是哪個專案的 D 編號。

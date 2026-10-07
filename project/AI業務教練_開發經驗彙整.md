@@ -36,7 +36,7 @@
 | `D:\Hao+App\AiCoach` | zjh0511/ai-sales-coach | zjh0511.github.io/ai-sales-coach/ | 2026-08 ～ 現在（45+ commits） | **穩定版原型，持續使用** |
 | ~~`D:\Hao+App\Ai_Sales_Coach_Local`~~ | ~~zjh0511/ai-sales-coach-local~~ | — | 08-16 ～ 08-26（1 commit） | **2026-10-07 已刪除**（保留資料在 `AiCoach\project\archive\local\`） |
 | ~~`D:\Hao+App\Ai_Sales_Coach_App`~~ | 沒有 repo（0 個 commit） | — | 08-17（一天） | **2026-10-07 已刪除**（保留資料在 `AiCoach\project\archive\app\`） |
-| `D:\Hao+App\AI業務教練App` | ~~zjh0511/ai-sales-coach-app~~ | ~~zjh0511.github.io/ai-sales-coach-app/~~ | 09-12 ～ 09-17（6 commits） | **GitHub repo 與測試站 2026-10-07 已刪除**；本機資料夾還在 |
+| `D:\Hao+App\AI業務教練App` | ~~zjh0511/ai-sales-coach-app~~ | ~~zjh0511.github.io/ai-sales-coach-app/~~ | 09-05 ～ 09-18（6 commits） | **2026-10-07 已刪除**（保留資料在 `AiCoach\project\archive\cloudflare\`；Cloudflare 上的資源要另外清理，見 §8） |
 
 - **注意**：GitHub 上的 `ai-sales-coach-app` **不是** `Ai_Sales_Coach_App` 推上去的，而是 `AI業務教練App` 那套。它是另一個架構：Cloudflare Workers + D1 + Firebase。
 - **教訓**：repo 名稱和資料夾名稱要對得起來，一個專案只用一組名字。
@@ -362,6 +362,32 @@
 - **決策編號撞號**：三個專案各自有 D022 以後的編號。新專案的決策紀錄要加前綴，或從新編號開始。
 - **文件要跟著程式更新**：README、SHARE.md、Handbook 的統計數字和檔案樹都過時了（見 §7）。
 - **重要文件不能只放本機**：Local 專案的決策紀錄 D022–D062（約 100KB）一直沒進版控。
+- **刪 GitHub repo 不等於關掉服務**：AI業務教練App 的 Cloudflare Worker、D1 資料庫、每 30 分鐘一次的排程，在 repo 刪掉後仍在運作。收掉專案時，要列出所有外部資源逐一清理（Cloudflare、OAuth 來源、服務商金鑰）。
+- **共用的外部設定不能跟著刪**：AI業務教練App 和 AiCoach 用同一個 Firebase 專案和同一個 Google 登入用戶端。收掉其中一個專案時，這兩樣要保留。
+
+### 4.11 有後端時（AI業務教練App：Cloudflare Workers + D1 的經驗）
+
+- **Workers 的 fetch 不接受 `redirect:'error'`**
+  - 症狀：Firebase 登入驗證一律失敗。
+  - 解法：改用 `redirect:'manual'`，再自己拒絕 3xx 回應。
+- **本機登入回 403**
+  - 原因：Chrome 送出的 Origin 是 `http://127.0.0.1`，沒有 port；Host 卻帶 port。
+  - 解法：只有在 Host 屬於允許清單、而且 `Sec-Fetch-Site=same-origin` 時，才補回 port。
+- **設定檔有 UTF-8 BOM 時解析失敗被吞掉**，結果畫面顯示「尚未設定」。
+- **Google OAuth 新增來源**：要等 5 分鐘到數小時才生效；來源不能有結尾斜線，也不能填在重新導向 URI 欄位。
+- **每回合即時合規查核太慢**
+  - 症狀：一回合 34 秒，常常 60 秒逾時。
+  - 解法：演練中每回合只呼叫一次模型；練完後每 4 句一批做事後查核，進度存起來，失敗可以接著查。
+- **AI 客戶被帶偏成業務員**
+  - 原因：對方說「哈囉哈囉／換你當業務」之後，對話歷史被污染。
+  - 解法：送出前把已經偏掉的句子改寫掉；角色由伺服器保存的 mode 決定。
+- **第二輪收音卡住**
+  - 原因：收到 final 結果就清掉辨識器。
+  - 解法：辨識器保留到 `onend` 之後才清；等 `audiostart` 才算麥克風接通；只取消「正在播放」的朗讀（WebKit bug 321436）。
+- **聲音評分**：錄原始音訊，每句最多 45 秒、每場最多 180 秒，不錄 AI 播放的聲音；證據不足就標「無法評估」，不捏造星等。18 秒音訊約 3.5 秒出結果。
+- **不要用 `AIza` 開頭判斷 Google 金鑰**：格式交給官方 API 驗證，權限錯誤和格式錯誤分開顯示。
+- **兩個分頁同時送出同一場演練**：用資料庫 revision 做 CAS 鎖。
+- 原始文件和程式保留在 `AiCoach\project\archive\cloudflare\`。
 
 ---
 
@@ -418,6 +444,12 @@
 - **以實際業務情境主導產品**：同事的回饋優先，例如理賠流程的順序。
 - **安全**：金鑰絕不顯示或複製；文件和金鑰不上雲；下載檔案前要先問；品牌主視覺每次使用前都要問。
 
+**AiCoach 待確認的問題**（2026-10-07 發現，還沒修）
+- **同一台手機換人登入，訓練紀錄會混在一起**
+  - 原因：登出時只清帳號，本機紀錄刻意保留（`app.js` 1625 行）；紀錄和偏好用固定的 `aicoach.history`／`aicoach.prefs`，沒有依帳號分開。
+  - 結果：下一個人登入後同步時，會把前一個人的紀錄合併進自己的帳號。
+  - 出處：Astra 外部審查報告 P0-1，`archive\cloudflare\MD檔\`。
+
 **AiCoach 文件待更新**
 - `README.md`：決策範圍、測試數量、已知限制第 7 條都過時了。
 - `SHARE.md`：還寫要選服務商，也沒提強制登入。
@@ -457,7 +489,12 @@
 - 這個 repo 是 `D:\Hao+App\AI業務教練App` 發布出去的「公開測試版」（6 commits，09-12～09-17）。
 - **網址 zjh0511.github.io/ai-sales-coach-app/ 目前仍在線上**，repo 刪掉網站就會消失。如果有同事還在用這個網址，要先通知。
 - 那套架構用到 Cloudflare Workers + D1：刪 GitHub repo 不會刪掉 Cloudflare 上的資源（如果有部署），要另外到 Cloudflare 後台清理。
-- 本彙整**沒有**深入檢視 `AI業務教練App` 資料夾，只確認了它的手機語音修正（已被 AiCoach D035 吸收）。
+- 2026-10-07 檢視過 `AI業務教練App` 資料夾，值得保留的部分已存到 `archive\cloudflare\`，之後資料夾移到資源回收筒。
+- **資料夾以外還要清理的地方**（只能在各服務的後台操作）：
+  - Cloudflare：Worker `hao-ai-sales-coach-api`、D1 資料庫 `hao-coach-app`（裡面可能有測試同事加密過的金鑰）。
+  - Google OAuth 網頁用戶端：可以移除 `http://127.0.0.1:8787`、`http://localhost:8787` 這兩個來源。**用戶端本身不能刪**，AiCoach 也在用。
+  - **Firebase 專案 `ai-sales-coach-4b4cb` 不能刪**，AiCoach 也在用。
+  - 測試期間用過的 OpenRouter、Groq 金鑰，到服務商後台撤銷。
 
 ---
 
