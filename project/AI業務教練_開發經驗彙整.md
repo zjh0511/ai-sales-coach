@@ -34,9 +34,9 @@
 | 本機資料夾 | GitHub repo | 公開網址 | 期間 | 狀態 |
 |---|---|---|---|---|
 | `D:\Hao+App\AiCoach` | zjh0511/ai-sales-coach | zjh0511.github.io/ai-sales-coach/ | 2026-08 ～ 現在（45+ commits） | **穩定版原型，持續使用** |
-| `D:\Hao+App\Ai_Sales_Coach_Local` | zjh0511/ai-sales-coach-local | zjh0511.github.io/ai-sales-coach-local/ | 08-16 ～ 08-26（1 commit） | 閒置，準備刪除 |
-| `D:\Hao+App\Ai_Sales_Coach_App` | **沒有 repo**（0 個 commit） | — | 08-17（一天） | 閒置，準備刪除 |
-| `D:\Hao+App\AI業務教練App` | zjh0511/ai-sales-coach-app | zjh0511.github.io/ai-sales-coach-app/（**仍在線上**） | 09-12 ～ 09-17（6 commits） | 公開測試版，見 §8 |
+| ~~`D:\Hao+App\Ai_Sales_Coach_Local`~~ | ~~zjh0511/ai-sales-coach-local~~ | — | 08-16 ～ 08-26（1 commit） | **2026-10-07 已刪除**（保留資料在 `AiCoach\project\archive\local\`） |
+| ~~`D:\Hao+App\Ai_Sales_Coach_App`~~ | 沒有 repo（0 個 commit） | — | 08-17（一天） | **2026-10-07 已刪除**（保留資料在 `AiCoach\project\archive\app\`） |
+| `D:\Hao+App\AI業務教練App` | ~~zjh0511/ai-sales-coach-app~~ | ~~zjh0511.github.io/ai-sales-coach-app/~~ | 09-12 ～ 09-17（6 commits） | **GitHub repo 與測試站 2026-10-07 已刪除**；本機資料夾還在 |
 
 - **注意**：GitHub 上的 `ai-sales-coach-app` **不是** `Ai_Sales_Coach_App` 推上去的，而是 `AI業務教練App` 那套。它是另一個架構：Cloudflare Workers + D1 + Firebase。
 - **教訓**：repo 名稱和資料夾名稱要對得起來，一個專案只用一組名字。
@@ -427,6 +427,9 @@
 ---
 
 ## 8. 刪除前確認清單（2026-10-07 盤點）
+
+> 🗑 2026-10-07 已完成刪除：本機兩個資料夾、Claude 裡的兩個舊對話、GitHub 的 `ai-sales-coach-local` 與 `ai-sales-coach-app`。
+> 以下保留當時的盤點內容，作為紀錄。
 
 > ✅ 2026-10-07 已經把下面兩個資料夾裡值得保留的文件和程式，複製到 `D:\Hao+App\AiCoach\project\archive\`（說明見那裡的 README.md）。
 > 沒有複製的：模型檔、金鑰檔、憑證，以及 AiCoach 已經有的共用規格文件。
