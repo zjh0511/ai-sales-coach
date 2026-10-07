@@ -490,6 +490,7 @@
 - **網址 zjh0511.github.io/ai-sales-coach-app/ 目前仍在線上**，repo 刪掉網站就會消失。如果有同事還在用這個網址，要先通知。
 - 那套架構用到 Cloudflare Workers + D1：刪 GitHub repo 不會刪掉 Cloudflare 上的資源（如果有部署），要另外到 Cloudflare 後台清理。
 - 2026-10-07 檢視過 `AI業務教練App` 資料夾，值得保留的部分已存到 `archive\cloudflare\`，之後資料夾移到資源回收筒。
+- ✅ 2026-10-07 已清理：Cloudflare Worker 和 D1 資料庫已刪除（帳號裡已沒有任何 Worker 和 D1）；OAuth 用戶端的兩個 `:8787` 來源已移除。還沒處理的：撤銷 OpenRouter、Groq 金鑰。
 - **資料夾以外還要清理的地方**（只能在各服務的後台操作）：
   - Cloudflare：Worker `hao-ai-sales-coach-api`、D1 資料庫 `hao-coach-app`（裡面可能有測試同事加密過的金鑰）。
   - Google OAuth 網頁用戶端：可以移除 `http://127.0.0.1:8787`、`http://localhost:8787` 這兩個來源。**用戶端本身不能刪**，AiCoach 也在用。
