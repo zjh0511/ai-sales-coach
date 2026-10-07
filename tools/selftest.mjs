@@ -828,6 +828,81 @@ if (run(1)) {
     delete globalThis.window; delete globalThis.speechSynthesis; delete globalThis.SpeechSynthesisUtterance;
     delete globalThis.AudioContext; delete globalThis.navigator.audioSession;
   }
+
+  // 換人登入（D047）。同一台裝置不同同事輪流登入時，原本會直接用上前一位的金鑰、看到前一位的客戶，
+  // 同步時還把前一位的訓練紀錄合併進自己的帳號。
+  console.log('=== 1r. 個人資料依帳號分開存放 ===');
+  {
+    const O = await import('../docs/engine/owner.js');
+    const ST = await import('../docs/engine/store.js');
+    const mk = () => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; };
+
+    const ls = mk(); let cur = 'uidA';
+    const my = O.scoped(ls, () => cur);
+    my.set(O.HISTORY, JSON.stringify([{ at: 1, name: 'A 的演練' }]));
+    my.set(O.APIKEY, 'key-A');
+    my.set(O.CLIENTS, JSON.stringify([{ name: 'A 的客戶' }]));
+    cur = 'uidB';
+    ok(my.get(O.HISTORY) === null, 'B 登入後看不到 A 的訓練紀錄（也就不會被同步進 B 的帳號）');
+    ok(my.get(O.APIKEY) === null, 'B 登入後拿不到 A 的金鑰');
+    ok(my.get(O.CLIENTS) === null, 'B 看不到 A 的理賠客戶');
+    cur = 'uidA';
+    ok(JSON.parse(my.get(O.HISTORY))[0].name === 'A 的演練', 'A 再登入時自己的資料都還在');
+    ok(O.scopedKey(O.HISTORY, null) === O.HISTORY, '沒有帳號功能時維持原本的鍵名');
+
+    // 更新前存在固定鍵名的舊資料
+    const old = () => {
+      const s = mk();
+      s.setItem(O.HISTORY, JSON.stringify([{ at: 5 }, { at: 6 }]));
+      s.setItem(O.APIKEY, 'old-key');
+      s.setItem(O.CLIENTS, '[{"name":"x"}]');
+      return s;
+    };
+    let s = old();
+    const info = O.legacyInfo(s);
+    ok(info.any && info.records === 2 && info.clients === 1, '認得出更新前的舊資料與筆數');
+    O.adoptLegacy(s, 'uidA', { withKey: true });
+    ok(s.getItem(O.scopedKey(O.APIKEY, 'uidA')) === 'old-key' && s.getItem(O.HISTORY) === null,
+      '更新當下登入的人：資料和金鑰一起歸給他，固定鍵名清空');
+    ok(!O.legacyInfo(s).any, '歸屬後不再算舊資料');
+    s = old();
+    O.adoptLegacy(s, 'uidB', { withKey: false });
+    ok(s.getItem(O.scopedKey(O.APIKEY, 'uidB')) === null && s.getItem(O.APIKEY) === null,
+      '事後才認領：金鑰不沿用，也不留在原處');
+    ok(JSON.parse(s.getItem(O.scopedKey(O.HISTORY, 'uidB'))).length === 2, '事後才認領：訓練紀錄完整歸他');
+    s = old();
+    s.setItem(O.scopedKey(O.HISTORY, 'uidA'), JSON.stringify([{ at: 6 }, { at: 9 }]));
+    O.adoptLegacy(s, 'uidA', { withKey: true });
+    ok(JSON.parse(s.getItem(O.scopedKey(O.HISTORY, 'uidA'))).map(r => r.at).join() === '9,6,5', '帳號已有紀錄時取聯集、不重複');
+    s = old();
+    O.dropLegacyKey(s);
+    ok(s.getItem(O.APIKEY) === null && O.legacyInfo(s).records === 2, '回答「不是我的」：金鑰拿掉，紀錄留給原本的人');
+    O.decline(s, 'uidB');
+    ok(O.declined(s, 'uidB') && !O.declined(s, 'uidA'), '「不是我的」只記在回答的那個人身上');
+
+    // 上傳的文件（Node 底下 store.js 用記憶體版，與瀏覽器的 IndexedDB 走同一套歸屬判斷）
+    ST.setOwner(null);
+    const before = (await ST.allDocs()).map(d => d.id);       // 前面章節留下、沒有 owner 的文件
+    await ST.putDoc({ id: 't-old', title: '舊文件' });
+    ST.setOwner('uidA');
+    await ST.putDoc({ id: 't-a', title: 'A 的教材' });
+    ok((await ST.allDocs()).map(d => d.id).join() === 't-a', 'A 只看得到自己的文件（舊文件還沒歸屬）');
+    ok(await ST.legacyDocCount() >= 1, '數得出還沒歸屬的舊文件');
+    ST.setOwner('uidB');
+    ok(!(await ST.allDocs()).some(d => d.id === 't-a') && await ST.getDocById('t-a') === null, 'B 看不到也讀不到 A 的文件');
+    await ST.delDoc('t-a');
+    ST.setOwner('uidA');
+    ok(!!await ST.getDocById('t-a'), 'B 刪不掉 A 的文件');
+    await ST.adoptLegacyDocs('uidA');
+    ok((await ST.allDocs()).some(d => d.id === 't-old'), '認領後舊文件歸 A');
+    // 收拾：刪掉測試文件，前面章節的文件還原成沒有 owner，後面的章節才看得到
+    await ST.delDoc('t-a'); await ST.delDoc('t-old');
+    const back = [];
+    for (const id of before) back.push(await ST.getDocById(id));
+    ST.setOwner(null);
+    for (const d of back) if (d) await ST.putDoc(d);
+    ok((await ST.allDocs()).map(d => d.id).join() === before.join(), '測試後文件狀態還原');
+  }
 }
 
 const models = await gw.init();

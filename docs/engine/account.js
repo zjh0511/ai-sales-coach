@@ -186,9 +186,12 @@ export async function signInApple() {
 // 用 Realtime Database 而不是 Firestore：REST 進出都是純 JSON。
 // Firestore 的 REST 要包 stringValue／arrayValue 這種型別外殼，
 // 同樣的功能程式碼會多一倍，而我們要存的東西本來就只是一包 JSON。
-async function dbUrl() {
+// expectUid：這份資料是誰的。取 token 時可能要等一下更新，等的期間若換了人，
+// 不能把前一位的資料寫進現在這位的雲端空間。
+async function dbUrl(expectUid) {
   const t = await token();
-  return t && FB.dbUrl.replace(/\/+$/, '') + '/users/' + A.uid + '.json?auth=' + t;
+  if (!t || (expectUid && A?.uid !== expectUid)) return null;
+  return FB.dbUrl.replace(/\/+$/, '') + '/users/' + A.uid + '.json?auth=' + t;
 }
 
 export async function pull() {
@@ -199,8 +202,8 @@ export async function pull() {
   return (await r.json()) || {};
 }
 
-export async function push(data) {
-  const u = await dbUrl(); if (!u) return false;
+export async function push(data, expectUid) {
+  const u = await dbUrl(expectUid); if (!u) return false;
   const r = await fetch(u, {
     method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data),
   });

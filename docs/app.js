@@ -1,12 +1,19 @@
 import { Voice, supported, voiceInfo, MIC_AFTER_TTS_MS } from './voice.js';
 import { TtsRotator, nextPacificMidnight, voiceFor, COACH_VOICES } from './engine/tts.js';
-import { api, providers, restore, onModelEvent } from './engine/api.js';
+import { api, providers, restore, onModelEvent, disconnect } from './engine/api.js';
 import { startOpenRouter, oauthSupported } from './engine/oauth.js';
 import * as acct from './engine/account.js';
+import * as own from './engine/owner.js';
+import { setOwner, legacyDocCount, adoptLegacyDocs } from './engine/store.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const LS = 'aicoach.history';
+
+// 個人資料（訓練紀錄、偏好、金鑰、理賠客戶、教練對話、語音額度狀態）依帳號分開存放，理由見 engine/owner.js。
+// 一律經過 my.get／set／del，不要直接用 localStorage 讀寫這幾項。
+const uid = () => (acct.configured() ? acct.user()?.uid || own.NOBODY : null);
+const my = own.scoped(localStorage, uid);
 
 const S = {
   fn: 'call',            // 目前功能：pain | call | needs | product | claim | chat
@@ -58,7 +65,7 @@ function toast(msg, ms = 2800) {
 const PROV_KEY = 'aicoach.provider';
 const AKEY_KEY = 'aicoach.apikey';
 
-const cred = () => ({ provider: localStorage.getItem(PROV_KEY), key: localStorage.getItem(AKEY_KEY) });
+const cred = () => ({ provider: localStorage.getItem(PROV_KEY), key: my.get(AKEY_KEY) });
 
 // api() 由 engine/api.js 提供；認證失敗會帶 e.auth，統一在這裡退回登入畫面
 window.addEventListener('unhandledrejection', e => { if (e.reason?.auth) logout(e.reason.message); });
@@ -74,8 +81,8 @@ async function initLogin() {
   const oldProvider = localStorage.getItem(PROV_KEY);
   let migrated = false;
   if (oldProvider && !PROVIDERS[oldProvider]) {
-    localStorage.removeItem(AKEY_KEY);
-    localStorage.removeItem(PIN_KEY);           // 別家的模型名稱在 Gemini 上不存在
+    my.del(AKEY_KEY);
+    my.del(PIN_KEY);           // 別家的模型名稱在 Gemini 上不存在
     localStorage.setItem(PROV_KEY, 'gemini');
     migrated = true;
   }
@@ -101,7 +108,7 @@ async function initLogin() {
     if (await restore(provider, key, loadPin())) {
       return show(localStorage.getItem('aicoach.seen') ? 'home' : 'welcome');
     }
-    localStorage.removeItem(AKEY_KEY);
+    my.del(AKEY_KEY);
     $('#lg-msg').className = 'note err';
     $('#lg-msg').textContent = '上次的金鑰已失效，請重新輸入';
   }
@@ -137,10 +144,10 @@ $('#lg-go').onclick = async () => {
   msg.className = 'note'; msg.textContent = '正在向服務商確認金鑰…';
   try {
     // 換服務商時舊的模型指定不再適用，清掉
-    if (localStorage.getItem(PROV_KEY) !== provider) localStorage.removeItem(PIN_KEY);
+    if (localStorage.getItem(PROV_KEY) !== provider) my.del(PIN_KEY);
     const j = await api('/login', { provider, key, pin: loadPin() });
     localStorage.setItem(PROV_KEY, provider);
-    localStorage.setItem(AKEY_KEY, key);
+    my.set(AKEY_KEY, key);
     $('#lg-key').value = '';
     msg.className = 'note ok'; msg.textContent = `已連線：${j.fast}`;
     updateAccount();
@@ -191,7 +198,7 @@ let modelFilter = '';
 // 指定的模型；null 代表自動。舊版存的是 {fast,judge} 物件，這裡順便遷移
 function loadPin() {
   try {
-    const v = JSON.parse(localStorage.getItem(PIN_KEY));
+    const v = JSON.parse(my.get(PIN_KEY));
     if (typeof v === 'string') return v;
     if (v && typeof v === 'object') {          // 舊的 {fast,judge} 格式 → 就地正規化
       const one = v.fast || v.judge || null;
@@ -201,7 +208,7 @@ function loadPin() {
   } catch { /* 格式壞掉就當沒設定 */ }
   return null;
 }
-const savePin = m => { m ? localStorage.setItem(PIN_KEY, JSON.stringify(m)) : localStorage.removeItem(PIN_KEY); savePrefs({}); };
+const savePin = m => { m ? my.set(PIN_KEY, JSON.stringify(m)) : my.del(PIN_KEY); savePrefs({}); };
 
 async function renderModels() {
   const b = $('#m-body'); b.innerHTML = '';
@@ -299,7 +306,7 @@ async function renderModels() {
 
 function logout(reason) {
   abort();
-  localStorage.removeItem(AKEY_KEY);
+  my.del(AKEY_KEY);
   if (reason) { $('#lg-msg').className = 'note err'; $('#lg-msg').textContent = reason; }
   show('login');
 }
@@ -355,9 +362,9 @@ const setChip = (id, v) => { const c = v && $(id).querySelector(`.chip[data-v="$
 
 // 偏好設定。原本難度與情境每次都要重選，新進夥伴常常忘了調回「新手友善」。
 const PREFS_KEY = 'aicoach.prefs';
-const prefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; } };
+const prefs = () => { try { return JSON.parse(my.get(PREFS_KEY)) || {}; } catch { return {}; } };
 function savePrefs(p) {
-  localStorage.setItem(PREFS_KEY, JSON.stringify({ ...prefs(), ...p, updatedAt: Date.now() }));
+  my.set(PREFS_KEY, JSON.stringify({ ...prefs(), ...p, updatedAt: Date.now() }));
   syncSoon();
 }
 
@@ -716,10 +723,11 @@ let ttsNotice = false;
 // 同一把金鑰、三個語音模型輪流（免費額度每個模型各自算）。
 // 哪個模型被擋、到什麼時候，記在手機裡，關掉 App 再打開也不會重複去撞。
 const TTSQ_KEY = 'aicoach.ttsq';
-const tts = new TtsRotator({ store: {
-  load: () => JSON.parse(localStorage.getItem(TTSQ_KEY) || '{}'),
-  save: st => localStorage.setItem(TTSQ_KEY, JSON.stringify(st)),
-} });
+const ttsStore = {
+  load: () => JSON.parse(my.get(TTSQ_KEY) || '{}'),
+  save: st => my.set(TTSQ_KEY, JSON.stringify(st)),
+};
+const tts = new TtsRotator({ store: ttsStore });
 voice.cloud = {
   // hint.cloudVoice：指定聲線（教練）；沒有就依性別挑（演練客戶）
   stream: (text, gender, signal, hint) => {
@@ -987,12 +995,12 @@ const CL_KEY = 'aicoach.clients';
 const MAX_POL = 5;                         // 與 engine/advisor.js 的 MAX_POLICIES 一致
 const fmt = n => Number(n).toLocaleString('en-US');
 
-const savedClients = () => { try { return JSON.parse(localStorage.getItem(CL_KEY) || '[]'); } catch { return []; } };
+const savedClients = () => { try { return JSON.parse(my.get(CL_KEY) || '[]'); } catch { return []; } };
 function storeClient(name, policies, keep) {
   try {
     const list = savedClients().filter(c => c.name !== name);
     if (keep && name) list.unshift({ name, at: Date.now(), policies: policies.map(({ docId, plan, start }) => ({ docId, plan, start })) });
-    localStorage.setItem(CL_KEY, JSON.stringify(list.slice(0, 30)));
+    my.set(CL_KEY, JSON.stringify(list.slice(0, 30)));
   } catch { /* 容量滿時忽略 */ }
 }
 
@@ -1213,9 +1221,10 @@ const clean = s => (s || '')
 // 目前這一串對話存在這支手機，下次打開還在；按「清除」才刪。不同步到雲端。
 const CHAT_KEY = 'aicoach.chat';
 function saveChat() {
-  try { localStorage.setItem(CHAT_KEY, JSON.stringify(S.chatHistory.slice(-60))); } catch { /* 容量滿時忽略 */ }
+  try { my.set(CHAT_KEY, JSON.stringify(S.chatHistory.slice(-60))); } catch { /* 容量滿時忽略 */ }
 }
-try { S.chatHistory = JSON.parse(localStorage.getItem(CHAT_KEY) || '[]'); } catch { S.chatHistory = []; }
+const loadChat = () => { try { S.chatHistory = JSON.parse(my.get(CHAT_KEY) || '[]'); } catch { S.chatHistory = []; } };
+loadChat();
 
 // 教練聲音：學員自己選，存在偏好設定（會跟著帳號同步到其他裝置）
 const coachGender = () => (prefs().coach === '女' ? '女' : '男');
@@ -1425,7 +1434,7 @@ $('#ch-done').onclick = () => {
 // ── 訓練紀錄（Local storage）────────────────────────────────
 function saveHistory(fb) {
   try {
-    const h = JSON.parse(localStorage.getItem(LS) || '[]');
+    const h = JSON.parse(my.get(LS) || '[]');
     h.unshift({
       at: Date.now(), mode: fb.mode, modeName: fb.modeName,
       persona: fb.persona?.summary || '', name: fb.persona?.name || '',
@@ -1433,14 +1442,14 @@ function saveHistory(fb) {
       summary: fb.summary, next: fb.next_challenge,
       kp: fb.key_points?.length ? [fb.key_points.filter(k => k.covered).length, fb.key_points.length] : undefined,
     });
-    localStorage.setItem(LS, JSON.stringify(h.slice(0, 50)));
+    my.set(LS, JSON.stringify(h.slice(0, 50)));
     syncSoon();
   } catch { /* 容量滿時忽略 */ }
 }
 
 function renderHistory() {
   const b = $('#h-body'); b.innerHTML = '';
-  const h = JSON.parse(localStorage.getItem(LS) || '[]');
+  const h = JSON.parse(my.get(LS) || '[]');
   if (!h.length) { b.append(el('p', 'note', '還沒有紀錄，先練一次看看。')); return; }
 
   const avg = {};
@@ -1464,7 +1473,7 @@ function renderHistory() {
     b.append(c);
   }
   const clr = el('button', 'link', '清除所有紀錄');
-  clr.onclick = () => { if (confirm('確定要刪除全部訓練紀錄？')) { localStorage.removeItem(LS); renderHistory(); } };
+  clr.onclick = () => { if (confirm('確定要刪除全部訓練紀錄？')) { my.del(LS); renderHistory(); } };
   b.append(clr);
 }
 
@@ -1479,30 +1488,64 @@ function renderHistory() {
 const LEGACY_SKIP = 'aicoach.noacct';
 let syncBadge = null, syncing = false, syncTimer;
 
+// 登入、登出、換人之後，把記憶體裡屬於前一位的東西換掉：教練對話、語音額度狀態、文件歸屬、進行中的理賠
+function switchOwner() {
+  setOwner(uid());
+  loadChat();
+  try { tts.state = ttsStore.load(); } catch { tts.state = {}; }
+  S.claim = null; S.doc = null; S.lastCustomer = null;
+}
+
+// 更新前的資料存在固定鍵名、沒有歸屬任何帳號（見 engine/owner.js）。使用者 2026-10-07 決定的規則：
+//   ask=false：更新後第一次打開時已經有人登入 → 直接歸給他（多半就是他自己的手機），金鑰一起沿用
+//   ask=true ：之後才有人登入 → 問他是不是他的；金鑰一律不沿用，答「不是」就留給原本的人
+const OWNER_MIGRATED = 'aicoach.owner.v1';
+async function claimLegacy(ask) {
+  const u = acct.user(); if (!u) return;
+  const info = own.legacyInfo(localStorage);
+  let docs = 0;
+  try { docs = await legacyDocCount(); } catch { /* 讀不到就當沒有 */ }
+  if (!info.any && !docs) return;
+  if (!ask) {
+    own.adoptLegacy(localStorage, u.uid, { withKey: true });
+    await adoptLegacyDocs(u.uid).catch(() => {});
+    return;
+  }
+  own.dropLegacyKey(localStorage);
+  if (own.declined(localStorage, u.uid)) return;
+  const what = [info.records && `${info.records} 筆訓練紀錄`, info.clients && `${info.clients} 位理賠客戶`,
+    docs && `${docs} 份上傳的文件`].filter(Boolean);
+  const yes = confirm(`這台裝置上有更新前留下、還沒歸屬任何帳號的資料（${what.join('、') || '一些設定與教練對話'}）。\n\n`
+    + '這些是你的嗎？\n・按「確定」：加入你的帳號\n・按「取消」：保留給原本的人，你不會看到這些資料');
+  if (!yes) return own.decline(localStorage, u.uid);
+  own.adoptLegacy(localStorage, u.uid, { withKey: false });
+  await adoptLegacyDocs(u.uid).catch(() => {});
+}
+
 function bundle() {
   let history = [];
-  try { history = JSON.parse(localStorage.getItem(LS) || '[]'); } catch { /* 壞資料當空的 */ }
+  try { history = JSON.parse(my.get(LS) || '[]'); } catch { /* 壞資料當空的 */ }
   const p = prefs();
   return {
     history,
     prefs: {
       diff: p.diff || '', ctx: p.ctx || '', coach: p.coach || '',
       provider: localStorage.getItem(PROV_KEY) || '',
-      models: localStorage.getItem(PIN_KEY) || '',
+      models: my.get(PIN_KEY) || '',
       updatedAt: p.updatedAt || 0,
     },
   };
 }
 
 function applyBundle(b) {
-  try { localStorage.setItem(LS, JSON.stringify((b.history || []).slice(0, 50))); } catch { /* 容量滿 */ }
+  try { my.set(LS, JSON.stringify((b.history || []).slice(0, 50))); } catch { /* 容量滿 */ }
   const p = b.prefs || {};
   // 模型指定只在「服務商相同」時才套用——別家的模型名稱放進來是無效的，
   // 會讓使用者在新裝置上看到一個根本不存在的模型。
   if (p.models && p.provider && p.provider === localStorage.getItem(PROV_KEY)) {
-    localStorage.setItem(PIN_KEY, p.models);
+    my.set(PIN_KEY, p.models);
   }
-  localStorage.setItem(PREFS_KEY, JSON.stringify({
+  my.set(PREFS_KEY, JSON.stringify({
     diff: p.diff || '', ctx: p.ctx || '', coach: p.coach || '', updatedAt: p.updatedAt || 0,
   }));
 }
@@ -1519,8 +1562,11 @@ function setSync(state) {
 async function syncNow(loud = false) {
   if (!acct.configured() || !acct.user() || syncing) return;
   syncing = true; setSync('busy');
+  const who = acct.user().uid;
   try {
     const remote = await acct.pull();
+    // 等雲端回應的這段時間裡換了人（登出、別人登入）：這一輪的資料不屬於現在的人，整輪放棄
+    if (acct.user()?.uid !== who) { syncing = false; return; }
     // pull() 回傳 null 代表拿不到 token。原本這裡照樣往下走、最後顯示「已同步」——
     // 離線或帳號失效時都在謊報成功。
     if (remote === null) {
@@ -1532,7 +1578,7 @@ async function syncNow(loud = false) {
     }
     const merged = acct.merge(bundle(), remote);
     applyBundle(merged);
-    if (!await acct.push(merged)) throw new Error('寫入雲端失敗，稍後會再試');
+    if (!await acct.push(merged, who)) throw new Error('寫入雲端失敗，稍後會再試');
     setSync('ok');
     if (loud) toast('已與雲端同步，共 ' + merged.history.length + ' 筆紀錄');
   } catch (e) {
@@ -1544,6 +1590,8 @@ async function syncNow(loud = false) {
 const syncSoon = () => { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 2500); };
 
 function accountRevoked() {
+  disconnect();
+  switchOwner();
   updateWho();
   toast('你的帳號已失效或被停用，請重新登入', 5000);
   const cur = document.querySelector('.screen.on')?.id;
@@ -1567,6 +1615,9 @@ function updateWho() {
 const authMsg = (cls, t) => { $('#au-msg').className = 'note ' + cls; $('#au-msg').textContent = t; };
 
 async function afterAuth() {
+  disconnect();                 // 記憶體裡可能還留著前一位的模型連線（帳號失效被登出時不會經過登出按鈕）
+  await claimLegacy(true);
+  switchOwner();
   updateWho();
   await syncNow(true);          // 先把雲端資料拉下來，再進金鑰流程（模型指定才會生效）
   await initLogin();
@@ -1622,9 +1673,17 @@ $('#au-apple').onclick = async () => {
   catch (e) { authMsg('err', e.message); }
 };
 
-$('#home-signout').onclick = () => {
-  if (!confirm('登出後要重新登入才能使用，本機的訓練紀錄會保留。確定登出？')) return;
+// 登出：下一位在這台裝置登入的人看不到你的資料（各帳號分開存放），你的金鑰也會清掉。
+// 資料本身留在這台裝置你的帳號底下，你再登入時都還在；訓練紀錄另有雲端備份。
+$('#home-signout').onclick = async () => {
+  if (!confirm('登出後，下一位在這台裝置登入的人看不到你的紀錄和資料。\n'
+    + '你的 API 金鑰會從這台裝置清除，下次登入要重新貼上。\n\n確定登出？')) return;
+  clearTimeout(syncTimer);
+  await syncNow();              // 還沒送上雲端的紀錄先送出去；沒網路也沒關係，資料仍留在你的帳號底下
+  my.del(AKEY_KEY);
   acct.signOut();
+  disconnect();
+  switchOwner();
   updateWho();
   initAuth();
   show('auth');
@@ -1839,6 +1898,14 @@ onModelEvent(e => {
 async function boot() {
   localStorage.removeItem(LEGACY_SKIP);
   setTimeout(autoInstallTip, 600);                  // 先讓畫面出來，再跳安裝教學
+  // 改成依帳號分開存放後第一次打開：當下登入的人就是這些舊資料的主人。
+  // 只做這一次——之後才登入的人一律用問的（claimLegacy(true)），不然答過「不是我的」的人
+  // 下次打開 App 會被默默歸進去。
+  if (acct.configured() && !localStorage.getItem(OWNER_MIGRATED)) {
+    if (acct.user()) await claimLegacy(false);
+    localStorage.setItem(OWNER_MIGRATED, '1');
+  }
+  switchOwner();
   // 強制登入：每個使用者都必須有帳號。
   // 判斷依據是本機存的登入狀態，不是連線檢查——沒網路時仍然進得去，
   // 否則一斷線就等於整個 App 被鎖住。

@@ -56,6 +56,9 @@ export async function restore(provider, key, pin) {
 
 export const isReady = () => !!gw;
 
+// 登出或換人登入時放掉記憶體裡的連線——金鑰清掉了，連線卻還拿著舊的，下一位就能直接用前一位的額度
+export function disconnect() { gw = null; current = { provider: null, key: null }; }
+
 // ── 路由（與伺服器版同名，方便日後再切回伺服器架構）──────────────
 export async function api(path, body = {}) {
   try {
