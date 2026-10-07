@@ -8,7 +8,10 @@ export const PROVIDERS = {
   gemini: {
     label: 'Google Gemini', note: '有免費額度，中文與語音演練實測最佳',
     // 新版 AI Studio 金鑰不一定是 AIza 開頭，別把格式寫死免得誤導
-    hint: '從 AI Studio 複製的那一整串', url: 'https://aistudio.google.com/apikey', file: true, verified: true,
+    hint: '從 AI Studio 複製的那一整串', file: true, verified: true,
+    // 先經過 Google 的「選擇帳戶」再到金鑰頁。直接開 AI Studio 會默默用瀏覽器預設的 Google 帳號——
+    // 手機登入好幾個 Google 帳號時，換人登入 App 後申請到的仍是第一個帳號的金鑰（使用者 2026-10-07 實測回報）。
+    url: 'https://accounts.google.com/AccountChooser?continue=' + encodeURIComponent('https://aistudio.google.com/apikey'),
   },
   openai: {
     label: 'OpenAI', note: '需付費，品質穩定',

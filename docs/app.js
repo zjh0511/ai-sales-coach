@@ -120,6 +120,15 @@ function syncProvider() {
   $('#lg-note').textContent = [p.note, p.hint ? `金鑰${p.hint}` : '', p.file ? '' : '（此服務商無法直接讀取 PDF）']
     .filter(Boolean).join('　·　');
   $('#lg-link').href = p.url || '#';
+  // 金鑰算在「申請時 AI Studio 登入的那個 Google 帳號」，不是 App 登入的帳號——程式也無從檢查一把金鑰是誰的，
+  // 只能在申請前提醒。手機登入好幾個 Google 帳號時，很容易拿到別人的金鑰（用掉別人的額度）。
+  const u = acct.user(), hint = $('#lg-acct');
+  hint.hidden = !u?.email;
+  if (u?.email) {
+    hint.replaceChildren('你在 App 登入的是 ', el('b', null, u.email),
+      '。按下面的按鈕會先請你選擇 Google 帳號——請選你自己的（用 Google 登入 App 的人就選這一個），'
+      + '不要用到別人的帳號，不然用的是別人的額度。');
+  }
   $('#lg-oauth').hidden = !(p.oauth && oauthSupported());
 }
 $('#lg-provider').onchange = syncProvider;
