@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>記憶體天花板量測｜手機診斷</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font:15px/1.7 -apple-system,"Noto Sans TC",sans-serif; margin:16px; max-width:640px; }
+  button { font:inherit; padding:12px 18px; border-radius:10px; border:1px solid #888;
+           background:transparent; color:inherit; margin:0 8px 8px 0; }
+  pre { background:#8881; padding:12px; border-radius:8px; white-space:pre-wrap;
+        font:13px/1.6 ui-monospace,Menlo,monospace; }
+  p.lead { color:#888; font-size:13px; }
+</style>
+</head>
+<body>
+<h2>記憶體天花板量測</h2>
+<p class="lead">
+  模型載入崩潰（Safari 顯示「重複發生問題」）代表分頁被系統殺掉。
+  與其每次下載幾百 MB 再撞一次牆，這一頁直接問出「這支手機最多給多少」。
+  <strong>每一項都是逐步加大，撐不住時分頁可能直接關閉——那也是答案。</strong>
+</p>
+
+<button id="b1">① wasm 記憶體上限</button>
+<button id="b2">② 一般記憶體上限（ArrayBuffer）</button>
+<pre id="log">建議先按 ①。它對應 wllama／llama.cpp 實際用的記憶體。</pre>
+
+<script type="module">
+const el = document.getElementById('log');
+const lines = [];
+const log = m => { lines.push(m); el.textContent = lines.join('\n'); };
+const MB = 1024 * 1024;
+
+log(`裝置：${navigator.userAgent.slice(0, 80)}`);
+log(`CPU 執行緒：${navigator.hardwareConcurrency || '?'}`);
+log('');
+
+// ① wasm 線性記憶體：wllama 把整個 GGUF 放進這裡，所以這是最相關的數字。
+// 逐步 grow，記錄最後成功的大小。
+document.getElementById('b1').onclick = async () => {
+  log('① wasm 記憶體：逐步加大…');
+  const PAGE = 64 * 1024;                       // wasm 一頁 64 KB
+  const step = 64;                              // 每次加 64 MB
+  let mem;
+  try {
+    mem = new WebAssembly.Memory({ initial: (128 * MB) / PAGE });
+    log('　起始 128 MB ✅');
+  } catch (e) {
+    log(`　連 128 MB 都配不到：${e.name}`);
+    return;
+  }
+  let mb = 128;
+  for (;;) {
+    try {
+      mem.grow((step * MB) / PAGE);
+      mb += step;
+      log(`　${mb} MB ✅`);
+      // 真的寫進去才算數：只 grow 不寫，系統可能還沒真正配置實體記憶體
+      const view = new Uint8Array(mem.buffer, (mb - step) * MB, 1 * MB);
+      view[0] = 1; view[view.length - 1] = 1;
+      await new Promise(r => setTimeout(r, 60));
+    } catch (e) {
+      log(`　${mb + step} MB ❌ ${e.name}：${String(e.message).slice(0, 60)}`);
+      log(`\n→ wasm 記憶體上限約 ${mb} MB`);
+      log(`→ 這代表 GGUF 檔案要明顯小於 ${mb} MB 才有機會（還要留給 KV cache 與執行期）`);
+      return;
+    }
+    // 上限提到 4096：iPhone 與 iPad 都撞到原本的 2048，那問不出真正的天花板。
+    // 4B 的純文字權重是 2,802 MB，要判斷它可不可行就得知道 3 GB 以上配不配得到。
+    if (mb >= 4096) { log('\n→ 已達 4096 MB 仍成功（接近 wasm 32 位元的理論上限）'); return; }
+  }
+};
+
+// ② 一般 JS 記憶體：ONNX 路線（transformers.js）主要用這一塊加上 GPU 緩衝區
+document.getElementById('b2').onclick = async () => {
+  log('② ArrayBuffer：逐步累加…');
+  const bufs = [];
+  let mb = 0;
+  for (;;) {
+    try {
+      const b = new ArrayBuffer(64 * MB);
+      new Uint8Array(b)[0] = 1;                 // 觸碰一下，強迫真的配置
+      bufs.push(b);
+      mb += 64;
+      if (mb % 256 === 0) log(`　${mb} MB ✅`);
+      await new Promise(r => setTimeout(r, 40));
+    } catch (e) {
+      log(`　${mb + 64} MB ❌ ${e.name}`);
+      log(`\n→ 一般記憶體上限約 ${mb} MB`);
+      return;
+    }
+    if (mb >= 6144) { log('\n→ 已達 6144 MB 仍成功'); return; }
+  }
+};
+</script>
+</body>
+</html>

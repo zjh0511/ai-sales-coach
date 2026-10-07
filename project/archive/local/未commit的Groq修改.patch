@@ -1,0 +1,154 @@
+diff --git a/docs/engine/gateway.js b/docs/engine/gateway.js
+index f1ebf2b..af7b7ab 100644
+--- a/docs/engine/gateway.js
++++ b/docs/engine/gateway.js
+@@ -51,7 +51,20 @@ const PICK = {
+   },
+   openai: { fast: [/mini/, /^gpt-/], judge: [/^gpt-5/, /^gpt-4\.1$/, /^gpt-4o$/, /^gpt-/] },
+   anthropic: { fast: [/haiku/, /sonnet/], judge: [/sonnet/, /opus/, /haiku/] },
+-  groq: { fast: [/instant/, /8b/, /scout/, /llama/], judge: [/70b/, /versatile/, /llama/] },
++  // Groq 的陣容換得很快。原本寫 [/instant/, /8b/, /scout/, /llama/] ——
++  // 2026-08-21 實測時那些 Llama 模型已經全部下架，唯一命中 /llama/ 的是
++  // prompt-guard 分類器。所以這裡改成依實測結果排序，並保留通用後備。
++  //
++  // 實測（中文角色扮演一回合，要求輸出 JSON）：
++  //   qwen/qwen3.8-27b     509 ms　42 tok　JSON ✅　繁體 ✅　完全在角色裡
++  //   qwen/qwen3.6-27b   1,226 ms　JSON ✅ 但 say 只有「...」
++  //   openai/gpt-oss-20b   638 ms　JSON ✅（**必須加 reasoning_effort，見 _call**）
++  //   openai/gpt-oss-120b       不加 reasoning_effort 時 400 token 全被思考吃掉，say 是空的
++  //   groq/compound      2,209 ms　JSON ✅ 但慢（它會做工具呼叫）
++  groq: {
++    fast: [/qwen3\.8/, /qwen[\d.]*-27b/, /qwen/, /gpt-oss-20b/, /compound-mini/],
++    judge: [/qwen3\.8/, /gpt-oss-120b/, /qwen[\d.]*-27b/, /qwen/, /compound$/],
++  },
+   // OpenRouter 有 400 多個模型，預設挑中文表現好且延遲低的；:free 模型實測中文品質差，不列入自動
+   openrouter: {
+     fast: [/^google\/gemini-[\d.]+-flash$/, /^anthropic\/claude-[\w.-]*-fast$/,
+@@ -353,13 +366,21 @@ class OpenAICompatAdapter extends Base {
+       }))
+       .filter(m => m.textOnly)
+       // :batch 是非同步批次介面，不能用在即時對話
+-      .filter(m => !/embed|whisper|tts|dall-e|moderation|realtime|transcribe|:batch/.test(m.id));
++      //
++      // ⚠ guard／safeguard／orpheus 是 2026-08-21 實測補上的。
++      //   當時 Groq 的清單裡有 meta-llama/llama-prompt-guard-2-22m（512 token 的
++      //   提示注入分類器）與 canopylabs/orpheus-*（語音合成）。它們不是對話模型，
++      //   但名稱裡沒有上面任何一個關鍵詞，所以全部通過了過濾——
++      //   **結果 adapter 把 prompt-guard 選成 fast 與 judge 模型，整個 Groq 路線是壞的。**
++      //   降階備援鏈也會掉到 orpheus 去。
++      .filter(m => !/embed|whisper|tts|dall-e|moderation|realtime|transcribe|:batch/.test(m.id))
++      .filter(m => !/guard|orpheus|rerank|classif/i.test(m.id));
+     if (!names.length) throw new Error('這把金鑰沒有可用的模型');
+     this._rank(names);
+     return { fast: this.fast, judge: this.judge };
+   }
+ 
+-  async _call(model, text, opts, altTokenField = false) {
++  async _call(model, text, opts, altTokenField = false, noJsonMode = false) {
+     if (opts.file) throw new Error(`${PROVIDERS[this.provider].label} 不支援直接讀取 PDF`);
+     const t0 = Date.now();
+     const messages = [
+@@ -374,7 +395,17 @@ class OpenAICompatAdapter extends Base {
+       temperature: opts.temp ?? 0.8,
+       [altTokenField ? 'max_completion_tokens' : 'max_tokens']: cap,
+       // 模型不支援 response_format 就別送（硬送會 400）；提示詞本身已要求只輸出 JSON
+-      ...(opts.json && meta.json !== false ? { response_format: { type: 'json_object' } } : {}),
++      ...(opts.json && meta.json !== false && !noJsonMode ? { response_format: { type: 'json_object' } } : {}),
++      // 推理型模型必須把思考關到最低，否則思考會吃掉整個輸出預算。
++      //
++      // 實測（2026-08-21，Groq 的 openai/gpt-oss-20b）：
++      //   不給 reasoning_effort → 400 token 全部用在思考，content 是空字串。
++      //   reasoning_effort: 'low' → 638 ms、63 token、JSON 完整，思考另外放在 reasoning 欄位。
++      //   （'none' 不被接受，只能是 low／medium／high。）
++      //
++      // 我們所有的提示詞都帶 noThink: true，所以條件掛在它身上；
++      // 用模型名稱限定範圍，避免送給不認識這個參數的服務商而收到 400。
++      ...(opts.noThink && /gpt-oss|reason/i.test(model) ? { reasoning_effort: 'low' } : {}),
+     };
+ 
+     let j;
+@@ -385,6 +416,20 @@ class OpenAICompatAdapter extends Base {
+     } catch (e) {
+       // 新版 OpenAI 模型只接受 max_completion_tokens
+       if (!altTokenField && /max_completion_tokens|max_tokens/.test(e.message)) return this._call(model, text, opts, true);
++
++      // JSON 模式驗證失敗 → 不帶 response_format 再試一次。
++      //
++      // 為什麼（2026-08-21 實測，Groq）：
++      //   Groq 會**驗證**輸出是不是合法 JSON，不合法就回 400 json_validate_failed，
++      //   而且 failed_generation 是空字串——**我們拿不到任何文字**。
++      //   這反而繞過了本專案原有的韌性：parseJson() 本來能從散文裡撈出 {...}。
++      //   所以嚴格的 JSON 模式在這裡把「可修復的解析問題」變成了「硬失敗」。
++      //
++      //   不帶 response_format 重試，模型會回傳文字，parseJson 就有東西可以救。
++      //   提示詞本身已經要求只輸出 JSON，所以成功率仍然很高。
++      if (!noJsonMode && /json_validate_failed|Failed to validate JSON/i.test(e.message)) {
++        return this._call(model, text, opts, altTokenField, true);
++      }
+       throw e;
+     }
+     const out = (j.choices?.[0]?.message?.content || '').trim();
+@@ -464,6 +509,21 @@ export function friendlyError(msg, provider) {
+   if (/\b402\b|payment required|insufficient (credit|balance|funds)|negative credit/i.test(m))
+     return `${name} 帳戶餘額不足，無法使用付費模型。請到 ${name} 後台儲值，`
+       + '或到首頁的「模型設定」改選名稱結尾為 :free 的免費模型。';
++  // 413 與 429 完全不同：這是「單一請求就超過每分鐘上限」，
++  // 再試一百次也不會成功，所以不能給「請稍後再試」這種建議。
++  //
++  // 實測（2026-08-21，Groq 免費方案）：演練後的評分提示詞是 10,572 token，
++  // 而免費方案每分鐘上限是 8,000——**評分在這個方案上結構性不可能完成**。
++  // 角色扮演（每回合約 1,500 token）完全沒問題。
++  if (/\b413\b|request too large|context length|maximum context/i.test(m)) {
++    const need = m.match(/Requested (\d+)/)?.[1];
++    const cap = m.match(/Limit (\d+)/)?.[1];
++    return `這一次的請求太大，超過${name}方案的單次上限`
++      + (need && cap ? `（需要 ${need} token，上限 ${cap}）` : '')
++      + '。演練對話沒問題，但演練後的評分需要一次送出整份逐字稿，量比較大。'
++      + '解法：改用額度較高的方案或其他服務商，或用「本機模型」模式——'
++      + '本機模式的評分是程式計算的，不需要 token。';
++  }
+   // 免費模型是所有使用者共用一個上游流量池，被限流跟「你的額度用完」是兩回事
+   if (/rate.?limited upstream|temporarily rate.?limited/i.test(m))
+     return '這個免費模型目前使用的人太多（免費模型是所有人共用流量），暫時排不進去。'
+diff --git a/tools/selftest.mjs b/tools/selftest.mjs
+index ea52f4c..817b874 100644
+--- a/tools/selftest.mjs
++++ b/tools/selftest.mjs
+@@ -4,7 +4,7 @@ import fs from 'node:fs';
+ import path from 'node:path';
+ import { fileURLToPath } from 'node:url';
+ import '../docs/engine/shims/node.js';   // 必須在任何 engine 模組之前
+-import { GeminiAdapter } from '../docs/engine/gateway.js';
++import { createAdapter } from '../docs/engine/gateway.js';
+ import * as CE from '../docs/engine/session.js';
+ import * as KB from '../docs/engine/knowledge.js';
+ import * as AD from '../docs/engine/advisor.js';
+@@ -21,15 +21,25 @@ const run = n => !ONLY || ONLY === String(n);
+ 
+ // 第 1 節是純規則層（合規、品牌中立化、文件解析），不呼叫任何模型。
+ // 本地模型版的日常回歸主要靠這一節，因此沒有雲端金鑰時也必須能跑。
+-const key = loadKeys().gemini;
+-if (!key && ONLY !== '1') { console.error('找不到 Gemini 金鑰。請在專案根目錄放「API Key.txt」，或設定 GEMINI_API_KEY。（只跑規則層：node tools/selftest.mjs 1）'); process.exit(1); }
++// 用手邊有的那把金鑰，不寫死服務商。
++//
++// 原本寫死 GeminiAdapter，所以拿到 Groq 金鑰的人跑不了模型層測試——
++// 而「換一家服務商會不會壞」正是這套測試最該回答的問題之一。
++// 順序是偏好順序：Gemini 中文與語音實測最佳，其餘依序備援。
++const KEYS = loadKeys();
++const PROVIDER = ['gemini', 'groq', 'openrouter', 'anthropic', 'openai', 'deepseek']
++  .find(p => KEYS[p]) || null;
++const key = PROVIDER ? KEYS[PROVIDER] : null;
++if (!key && ONLY !== '1') { console.error('找不到任何服務商金鑰。請在專案根目錄放「API Key.txt」，或設定 GEMINI_API_KEY。（只跑規則層：node tools/selftest.mjs 1）'); process.exit(1); }
+ 
+ let pass = 0, fail = 0;
+ const ok = (c, m, extra = '') => { c ? pass++ : fail++; console.log(`${c ? '  ok  ' : ' FAIL '} ${m}${extra ? ' → ' + extra : ''}`); };
+ const t = () => Date.now();
+ const perf = {};
+ 
+-const gw = key ? new GeminiAdapter(key) : null;
++const gw = key ? createAdapter(PROVIDER, key) : null;
++if (gw) console.log(`
++服務商：${PROVIDER}`);
+ 
+ // ── 1. 規則引擎與文件解析（不呼叫模型）────────────────────────
+ if (run(1)) {

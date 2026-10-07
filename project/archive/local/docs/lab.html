@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>L0b 本機模型量測台｜AI業務教練</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --dim:#666; --line:#e3e3e3; --ok:#0a7d3f; --bad:#c0322b; --warn:#9a6700; --card:#fafafa; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161616; --fg:#eee; --dim:#9a9a9a; --line:#333; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --card:#1e1e1e; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; max-width:900px; margin-inline:auto; background:var(--bg); color:var(--fg);
+         font:15px/1.6 -apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:22px 0 8px; padding-top:14px; border-top:1px solid var(--line); }
+  p.lead { color:var(--dim); margin:0 0 16px; font-size:13px; }
+  button { font:inherit; padding:9px 15px; border:1px solid var(--line); border-radius:8px; background:var(--card);
+           color:var(--fg); cursor:pointer; margin:0 6px 6px 0; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:11px;
+        overflow-x:auto; font:12px/1.5 ui-monospace,Consolas,monospace; white-space:pre-wrap; margin:8px 0; }
+  table { border-collapse:collapse; width:100%; font-size:13px; margin:8px 0; }
+  th,td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:500; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,monospace; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  progress { width:100%; height:7px; }
+  .bar { font-size:12px; color:var(--dim); margin:4px 0; }
+  .turn { border:1px solid var(--line); border-radius:8px; padding:10px; margin:8px 0; background:var(--card); }
+  .turn .u { color:var(--dim); font-size:13px; }
+  .turn .a { margin:6px 0; }
+  .meta { font-size:12px; color:var(--dim); font-family:ui-monospace,monospace; }
+</style>
+</head>
+<body>
+<h1>L0b 本機模型量測台</h1>
+<p class="lead">
+  用<strong>真實的角色扮演提示詞</strong>（<code>engine/prompts.js</code>，不是簡化版）量測本機模型。
+  量的是首 token 延遲、生成速度、JSON 可解析率，以及程式層攔截次數。
+  開發機的數字是上限參考；驗收在 <strong>iPad Pro M5（iPadOS 26.6）</strong> 上做——2026-08-20 實測該裝置的 WebGPU 推論可用，而 iPhone 14 Pro 不可用。
+</p>
+
+<h2>1. 裝置能力</h2>
+<button id="btn-probe">偵測</button>
+<pre id="out-probe">尚未偵測</pre>
+
+<h2>2. 載入模型</h2>
+<button id="btn-load" disabled>載入</button>
+<button id="btn-unload" disabled>卸載</button>
+<button id="btn-cache">看／清快取</button>
+<div class="bar" id="bar-text"></div>
+<progress id="bar" value="0" max="100" hidden></progress>
+<pre id="out-load">尚未載入</pre>
+
+<h2>3. 單回合</h2>
+<p class="lead">
+  <label><input type="checkbox" id="use-small" checked>
+  壓縮提示詞（<code>prompts.small.js</code>）</label>　
+  <label><input type="checkbox" id="use-plain" checked>
+  純文字輸出（數字全部由程式算）</label><br>
+  兩個都取消＝原始 <code>prompts.js</code> ＋ JSON，可直接 A／B／C 對照。
+  純文字模式下 JSON 解析失敗在結構上不可能發生。
+</p>
+<button id="btn-one" disabled>跑一個回合</button>
+<button id="btn-stop" disabled>中斷</button>
+<pre id="out-one">—</pre>
+
+<h2>4. 五回合腳本（人設一致性與 JSON 穩定度）</h2>
+<p class="lead">
+  餵入的是新手常見的爛開場（結巴、沒重點）。依 handbook §2.4，Level 1 的客戶
+  <strong>應該幫他接話而不是掛電話</strong>；同時檢查隱藏需求是否用編號回報（D009）。
+</p>
+<button id="btn-script" disabled>跑五回合</button>
+<div id="out-script"></div>
+<pre id="out-summary" hidden></pre>
+
+<script type="module" src="lab.js"></script>
+</body>
+</html>

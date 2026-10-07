@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>語音延遲量測台｜4B ＋ 串流 TTS</title>
+<style>
+  :root { color-scheme: light dark; --line:#8884; }
+  body { font:16px/1.7 -apple-system,"Noto Sans TC",sans-serif; margin:16px; max-width:760px; }
+  h2 { font-size:19px; margin:0 0 4px; }
+  p.lead { color:#888; font-size:13px; margin:0 0 16px; }
+  button { font:inherit; padding:13px 20px; border-radius:10px; border:1px solid #888;
+           background:transparent; color:inherit; margin:0 8px 8px 0; }
+  button:disabled { opacity:.45; }
+  pre { background:#8881; padding:12px; border-radius:8px; white-space:pre-wrap;
+        font:13px/1.7 ui-monospace,Menlo,monospace; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; font-size:15px; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,monospace; }
+  .big { font-size:28px; font-weight:600; }
+  .say { background:#8881; padding:10px; border-radius:8px; margin:8px 0; }
+  progress { width:100%; height:8px; }
+</style>
+</head>
+<body>
+<h2>語音延遲量測台</h2>
+<p class="lead">
+  量的是「<strong>客戶何時開始說話</strong>」，不是「何時說完」。
+  語音對練裡使用者感知的延遲是前者——iPad 上 4B 生成完要 3.5 秒，
+  但首 token 只要 2.4 秒；如果第一句一出現就開口，感受完全不同。
+</p>
+
+<h3>① 準備（必須先按這個）</h3>
+<p class="lead">
+  這一步會在你的手勢中解鎖 iOS 的語音合成（否則之後不會出聲），並載入模型。
+</p>
+<button id="b1">準備：解鎖語音 ＋ 載入模型</button>
+<div id="bar-wrap" hidden><progress id="bar" value="0" max="100"></progress><div id="bar-text"></div></div>
+<pre id="out1">尚未準備</pre>
+
+<h3>② 跑一輪</h3>
+<button id="b2" disabled>串流 ＋ 邊生成邊說</button>
+<button id="b3" disabled>對照組：生成完才說</button>
+<button id="b4" disabled>對照組：完全不說</button>
+<div id="say" class="say" hidden></div>
+<div id="result"></div>
+<pre id="out2">—</pre>
+
+<script type="module">
+import { GgufRuntime } from './engine/local/runtime-gguf.js';
+import { StreamSpeaker, pickVoice } from './voice-stream.js';
+import { roleplayRawPrompt, rawStops } from './engine/prompts.small.js';
+import { turnSignals } from './engine/scoring/turn-signals.js';
+
+const $ = id => document.getElementById(id);
+const Q = new URLSearchParams(location.search);
+
+const rt = new GgufRuntime({
+  mirrorBase: Q.get('mirror') === '1' ? '/models/' : null,
+  selfDownload: Q.get('dl') === 'self',
+  direct: Q.get('dl') === 'direct',
+  useCache: Q.get('cache') !== '0',
+  nCtx: Number(Q.get('ctx')) || null,
+});
+const PREFER = Q.get('m') || 'qwen3-4b-gguf';
+const DT = Q.get('dt') || 'q3';
+
+// 與量測台同一份人設與腳本，數字才能互相對照
+const PERSONA = {
+  name: '王小姐', gender: '女', age: '約 38 歲',
+  background: '護理師，離婚獨自扶養一個小學的女兒，輪三班',
+  personality: '講話客氣但有點累，不太會直接拒絕人',
+  communication_style: '語速偏慢，會停頓，習慣先問「這要花多少時間」',
+  insurance_attitude: '知道保險重要，但覺得自己已經有公司團保應該夠了',
+  time_pressure: '剛下夜班，等一下要去接小孩',
+  hidden_needs: [
+    { text: '擔心自己萬一倒下，女兒的生活費與學費沒人接手', keywords: ['倒下', '學費', '沒人照顧', '生活費'] },
+    { text: '公司團保只保在職期間，離職或退休後就沒了', keywords: ['團保', '在職', '離職', '退休'] },
+    { text: '手上有一筆定存快到期，不知道該怎麼處理', keywords: ['定存', '到期'] },
+  ],
+  difficulty: 1, contextNote: '',
+};
+const USER_TEXT = '呃…王小姐您好，我是…我是做保險的，那個…想跟您介紹一下我們的新商品';
+
+let speaker = null;
+
+$('b1').onclick = async () => {
+  $('b1').disabled = true;
+  // ⚠ 解鎖必須發生在這個手勢裡，不能等模型載完再做（那時已經不是手勢上下文）
+  speaker = new StreamSpeaker({ lang: 'zh-TW' });
+  speaker.unlock();
+
+  const voices = speechSynthesis.getVoices();
+  // 列出中文語音並標示是否為加強版。iOS 預設的壓縮語音聽起來很機械，
+  // 使用者可到「設定 → 輔助使用 → 旁白 → 語音」下載加強版，下載後會出現在這個清單裡。
+  const zh = voices.filter(v => /^zh/i.test(v.lang))
+    .map(v => `${v.name}（${v.lang}）${/enhanced|premium|加強|優化/i.test(v.name) ? ' ★加強版' : ''}`);
+  $('out1').textContent = [
+    `語音合成：${'speechSynthesis' in window ? '支援' : '不支援'}`,
+    `中文語音：${zh.length ? zh.join('、') : '（清單尚未載入，iOS 是非同步的，通常按第二次就有）'}`,
+    `選用：${pickVoice('zh-TW')?.name || '（尚未選到，會用系統預設）'}`,
+    '',
+    '載入模型中…',
+  ].join('\n');
+
+  $('bar-wrap').hidden = false;
+  try {
+    const { plan } = await rt.plan_(PREFER);
+    if (DT !== plan.dtype) plan.dtype = DT;
+    const { ms } = await rt.load(p => {
+      if (!p.total) return;
+      $('bar').value = (p.loaded / p.total) * 100;
+      $('bar-text').textContent = `${(p.loaded / 1e6).toFixed(0)} / ${(p.total / 1e6).toFixed(0)} MB`;
+    });
+    $('bar-wrap').hidden = true;
+    $('out1').textContent += `\nOK ${plan.label}｜${plan.dtype}｜載入 ${(ms / 1000).toFixed(1)} 秒`;
+
+    // 暖身：把 shader 編譯與前綴 KV 的一次性成本挪到使用者開始說話之前。
+    // 實測不暖身時第一回合首 token 是 6,998 ms，暖身後是 351 ms（差 20 倍）。
+    $('out1').textContent += '\n暖身中（第一次生成很慢，這一步就是把它挪到現在付掉）…';
+    const warmPrompt = roleplayRawPrompt(PERSONA, 'call', 'cold', {
+      history: [], userText: '您好', trust: 70, guidance: 0,
+      difficulty: 1, maxGuidance: 5, canEnd: false,
+    });
+    const wms = await rt.warmup(warmPrompt);
+    $('out1').textContent += `\nOK 暖身完成 ${((wms || 0) / 1000).toFixed(1)} 秒`;
+
+    $('b2').disabled = $('b3').disabled = $('b4').disabled = false;
+  } catch (e) {
+    $('bar-wrap').hidden = true;
+    $('out1').textContent += `\n❌ [${e.kind}] ${e.message}`;
+    $('b1').disabled = false;
+  }
+};
+
+// mode: 'stream' | 'after' | 'silent'
+async function run(mode) {
+  for (const b of ['b2', 'b3', 'b4']) $(b).disabled = true;
+  $('say').hidden = false;
+  $('say').textContent = '（等待第一個字…）';
+  $('result').innerHTML = '';
+  $('out2').textContent = '';
+
+  speaker.reset();
+  const t0 = performance.now();
+  const mark = {};
+  const at = k => { if (mark[k] == null) mark[k] = Math.round(performance.now() - t0); };
+
+  if (mode === 'stream') {
+    speaker.onFirstSpeech = () => at('speakStart');
+    speaker.onDone = () => { at('speakEnd'); render(mark, text); };
+  }
+
+  let text = '';
+  const prompt = roleplayRawPrompt(PERSONA, 'call', 'cold', {
+    history: [], userText: USER_TEXT, trust: 70, guidance: 0,
+    difficulty: 1, maxGuidance: 5, canEnd: false,
+  });
+
+  let r;
+  try {
+    r = await rt.generate([], {
+      tier: 'roleplay',
+      raw: prompt,
+      stops: rawStops(PERSONA.name),
+      onDelta: d => {
+        at('firstToken');
+        text += d;
+        $('say').textContent = text;
+        if (mode === 'stream') speaker.push(d);
+      },
+    });
+  } catch (e) {
+    $('out2').textContent = `❌ [${e.kind}] ${e.message}`;
+    for (const b of ['b2', 'b3', 'b4']) $(b).disabled = false;
+    return;
+  }
+
+  at('genDone');
+  text = r.text || text;
+  $('say').textContent = text;
+
+  if (mode === 'stream') {
+    speaker.flush();
+  } else if (mode === 'after') {
+    // 對照組：生成完才整段送出（V1 的做法）
+    speaker.onFirstSpeech = () => at('speakStart');
+    speaker.onDone = () => { at('speakEnd'); render(mark, text); };
+    speaker.push(text);
+    speaker.flush();
+  } else {
+    render(mark, text);
+  }
+
+  const sig = turnSignals({ modelJson: { say: text }, userText: USER_TEXT, persona: PERSONA, difficulty: 1 });
+  $('out2').textContent = [
+    `模型：${r.model}｜輸出 ${r.stats.outTokens} token｜${r.stats.tps} tok/s`,
+    `程式判定：信任 ${sig.trustDelta > 0 ? '+' : ''}${sig.trustDelta}　透露 ${JSON.stringify(sig.revealed)}`,
+    sig.trustWhy.length ? `依據：${sig.trustWhy.join('；')}` : '',
+    (sig.echo || sig.wrongRole || sig.invertsRole || sig.tooCompliant || sig.repeatsWithin)
+      ? `⚠ 攔截：${[sig.echo && '重複對方', sig.repeatsWithin && '句內重複', sig.wrongRole && '自稱業務員',
+        sig.invertsRole && '角色反轉', sig.tooCompliant && '過度順從'].filter(Boolean).join('、')}`
+      : '✅ 程式層檢查全部通過',
+  ].filter(Boolean).join('\n');
+
+  for (const b of ['b2', 'b3', 'b4']) $(b).disabled = false;
+}
+
+$('b2').onclick = () => run('stream');
+$('b3').onclick = () => run('after');
+$('b4').onclick = () => run('silent');
+
+function render(m, text) {
+  const rows = [
+    ['送出（使用者說完）', 0, ''],
+    ['首 token（模型開始產出）', m.firstToken, ''],
+    ['**客戶開始說話**', m.speakStart, '← 這是使用者真正感受到的延遲'],
+    ['生成完成', m.genDone, ''],
+    ['語音播完', m.speakEnd, ''],
+  ];
+  // ⚠ 不可以拿「生成完成」代替「開始說話」。
+  //   原本寫成 `m.speakStart ?? m.genDone`，結果 TTS 完全沒發聲的那一輪
+  //   照樣顯示「0.78 秒 ✅ 達標」——**安靜地給出錯的結論**（handbook §9.2 第 9 條）。
+  //   量不到就要說量不到。
+  const spoke = m.speakStart != null;
+  const head = spoke
+    ? `<div>感知延遲 <span class="big">${(m.speakStart / 1000).toFixed(2)} 秒</span>
+        ${m.speakStart <= 2000 ? '✅ 達成規格 §29 的 2 秒' : '❌ 超過 2 秒'}</div>`
+    : `<div><span class="big">語音沒有發聲</span><br>
+        <span style="color:#c33">量不到「開始說話」的時間，所以這一輪沒有感知延遲可談。
+        生成本身花了 ${m.genDone} ms。iOS 的 speechSynthesis 在連續 cancel／speak 後偶爾會卡住
+        （handbook §4.5 記錄過 onend 不觸發，這裡是 onstart 不觸發）。</span></div>`;
+  $('result').innerHTML = `
+    ${head}
+    <table>
+      <tr><th>事件</th><th style="text-align:right">毫秒</th><th></th></tr>
+      ${rows.map(([k, v, note]) => `<tr><td>${k.replace(/\*\*/g, '')}</td>
+        <td class="n">${v == null ? '—' : v}</td><td style="color:#888;font-size:13px">${note}</td></tr>`).join('')}
+    </table>`;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速度分項量測｜手機診斷</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font:15px/1.7 -apple-system,"Noto Sans TC",sans-serif; margin:16px; max-width:640px; }
+  button { font:inherit; padding:12px 18px; border-radius:10px; border:1px solid #888; background:transparent;
+           color:inherit; margin:0 8px 8px 0; }
+  pre { background:#8881; padding:12px; border-radius:8px; white-space:pre-wrap;
+        font:13px/1.6 ui-monospace,Menlo,monospace; }
+  h3 { margin:18px 0 6px; font-size:16px; }
+  p.lead { color:#888; font-size:13px; }
+</style>
+</head>
+<body>
+<h2>速度分項量測</h2>
+<p class="lead">
+  模型載入慢有三種可能：網路慢、OPFS 寫入慢、或 wllama 的分段策略在 iOS 上很差。
+  這一頁把三者分開量，才知道該修哪一個。
+</p>
+
+<button id="b1">① 純下載（32 MB，不寫入）</button>
+<button id="b2">② 純寫入 OPFS（32 MB）</button>
+<button id="b3">③ 下載＋寫入（32 MB）</button>
+<button id="b4">④ 小分段下載（32 × 1 MB）</button>
+<pre id="log">按上面任一個開始。</pre>
+
+<script type="module">
+const el = document.getElementById('log');
+const lines = [];
+const log = m => { lines.push(m); el.textContent = lines.join('\n'); };
+
+const MB = 1024 * 1024;
+const SIZE = 32 * MB;
+const URL_MODEL = '/models/MiniCPM5-1B-Q8_0.gguf';
+
+log(`裝置：${navigator.userAgent.slice(0, 90)}`);
+const c = navigator.connection;
+if (c) log(`連線資訊：${c.effectiveType || '?'}　downlink ${c.downlink ?? '?'} Mbps`);
+log(`儲存配額：${await (async () => {
+  try { const e = await navigator.storage.estimate(); return `${Math.round((e.usage || 0) / 1e6)} / ${Math.round((e.quota || 0) / 1e6)} MB`; }
+  catch { return '查不到'; }
+})()}`);
+log('');
+
+const rate = (bytes, ms) => `${(bytes / MB).toFixed(0)} MB / ${(ms / 1000).toFixed(1)} 秒 = ${((bytes / MB) / (ms / 1000)).toFixed(1)} MB/s`;
+
+// ① 純下載：一次 Range 請求抓 32 MB，丟掉不存
+document.getElementById('b1').onclick = async () => {
+  log('① 純下載中…');
+  const t0 = performance.now();
+  try {
+    const r = await fetch(URL_MODEL, { headers: { Range: `bytes=0-${SIZE - 1}` } });
+    const buf = await r.arrayBuffer();
+    log(`　完成 ${rate(buf.byteLength, performance.now() - t0)}　（HTTP ${r.status}）`);
+  } catch (e) { log(`　失敗：${e}`); }
+};
+
+// ② 純寫入：不碰網路，只寫 OPFS
+document.getElementById('b2').onclick = async () => {
+  log('② 純寫入 OPFS 中…');
+  const t0 = performance.now();
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('nettest.bin', { create: true });
+    const w = await fh.createWritable();
+    const chunk = new Uint8Array(4 * MB);
+    for (let i = 0; i < SIZE / chunk.length; i++) await w.write(chunk);
+    await w.close();
+    log(`　完成 ${rate(SIZE, performance.now() - t0)}`);
+    await root.removeEntry('nettest.bin');
+  } catch (e) { log(`　失敗：${e}`); }
+};
+
+// ③ 下載＋寫入：模擬 wllama 實際做的事
+document.getElementById('b3').onclick = async () => {
+  log('③ 下載＋寫入中…');
+  const t0 = performance.now();
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('nettest2.bin', { create: true });
+    const w = await fh.createWritable();
+    const r = await fetch(URL_MODEL, { headers: { Range: `bytes=0-${SIZE - 1}` } });
+    // Safari 沒有 ReadableStream 的 async iterator，必須用 getReader()
+    const reader = r.body.getReader();
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await w.write(value);
+      got += value.byteLength;
+    }
+    await w.close();
+    log(`　完成 ${rate(got, performance.now() - t0)}`);
+    await root.removeEntry('nettest2.bin');
+  } catch (e) { log(`　失敗：${e}`); }
+};
+
+// ④ 小分段：32 次 1 MB 的 Range 請求。
+// 若這一項遠慢於①，問題就是「每次請求的固定成本」——
+// 那正是 wllama 分段下載時會遇到的情況。
+document.getElementById('b4').onclick = async () => {
+  log('④ 小分段下載中（32 × 1 MB）…');
+  const t0 = performance.now();
+  try {
+    let got = 0;
+    for (let i = 0; i < 32; i++) {
+      const s = i * MB, e = s + MB - 1;
+      const r = await fetch(URL_MODEL, { headers: { Range: `bytes=${s}-${e}` } });
+      got += (await r.arrayBuffer()).byteLength;
+    }
+    log(`　完成 ${rate(got, performance.now() - t0)}`);
+  } catch (e) { log(`　失敗：${e}`); }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>最小診斷｜本機推論</title>
+<style>
+  body { font:14px/1.6 ui-monospace,Consolas,monospace; margin:16px; max-width:900px; }
+  pre { background:#f6f6f6; padding:10px; border-radius:6px; white-space:pre-wrap; }
+  @media (prefers-color-scheme: dark) { body{background:#161616;color:#eee} pre{background:#222} }
+</style>
+</head>
+<body>
+<h3>最小診斷（主執行緒，逐步記錄）</h3>
+<p>用途：確認「卡住」發生在哪一步。可用 URL 參數切換：<br>
+<code>?model=onnx-community/Qwen3.5-0.8B-ONNX&amp;dtype=q4f16&amp;device=webgpu&amp;max=8&amp;vl=1</code></p>
+<pre id="log">啟動中…</pre>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const MODEL = q.get('model') || 'onnx-community/Qwen3.5-0.8B-ONNX';
+const DTYPE = q.get('dtype') || 'q4f16';
+const DEVICE = q.get('device') || 'webgpu';
+const MAX = Number(q.get('max') || 8);
+const VL = q.get('vl') !== '0';          // 是否為多模態（Qwen3_5ForConditionalGeneration）
+// pad=N：把提示詞灌大到約 N 個 token，用來量 prefill 隨長度如何成長。
+// 這是本專案的關鍵數字：真實的角色扮演 system prompt 約 900～1000 token（prompts.js），
+// 若 prefill 隨長度線性暴增，0.8B 的「速度優勢」在真實提示詞下會完全消失。
+const PAD = Number(q.get('pad') || 0);
+const FILLER = '客戶背景補充：她是護理師，輪三班，離婚獨自扶養一個小學的女兒，'
+  + '平常最擔心的是自己萬一倒下女兒沒人照顧，手上有一筆定存快到期不知道怎麼處理。';
+let PROMPT = q.get('p') || '你好，請用繁體中文說一句話。';
+if (PAD) PROMPT = FILLER.repeat(Math.max(1, Math.round(PAD / 45))) + PROMPT;
+
+const el = document.getElementById('log');
+const t0 = performance.now();
+const lines = [];
+const log = m => { lines.push(`[${((performance.now() - t0) / 1000).toFixed(1)}s] ${m}`); el.textContent = lines.join('\n'); };
+
+try {
+  log(`模型 ${MODEL}｜dtype ${DTYPE}｜device ${DEVICE}｜多模態 ${VL}`);
+  const T = await import('/vendor/transformers/transformers.web.min.js');
+  T.env.backends.onnx.wasm.wasmPaths = '/vendor/transformers/';
+  T.env.allowLocalModels = false;
+  log(`transformers.js 匯入完成`);
+
+  // 多模態模型用 AutoProcessor（它內含 tokenizer）；純文字模型沒有 preprocessor_config.json，
+  // 必須用 AutoTokenizer，否則會因為找不到那個檔案而失敗。
+  const proc = VL ? await T.AutoProcessor.from_pretrained(MODEL) : await T.AutoTokenizer.from_pretrained(MODEL);
+  log(`${VL ? 'processor' : 'tokenizer'} 完成`);
+
+  const Cls = VL ? T.Qwen3_5ForConditionalGeneration : T.AutoModelForCausalLM;
+  const dtype = VL
+    ? { embed_tokens: DTYPE, decoder_model_merged: DTYPE, vision_encoder: DTYPE }
+    : DTYPE;
+  let done = 0, total = 0;
+  const model = await Cls.from_pretrained(MODEL, {
+    dtype, device: DEVICE,
+    progress_callback: p => { if (p.status === 'progress' && p.total) { total = p.total; done = p.loaded; } },
+  });
+  log(`模型載入完成（最後一個檔案 ${(done / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB）`);
+  log(`sessions: ${Object.keys(model.sessions || {}).join(', ') || '（取不到）'}`);
+
+  const tok = proc.tokenizer ?? proc;
+  const msgs = [{ role: 'user', content: PROMPT }];
+  const inputs = await (proc.apply_chat_template
+    ? proc.apply_chat_template(msgs, { add_generation_prompt: true, tokenize: true, return_dict: true })
+    : tok.apply_chat_template(msgs, { add_generation_prompt: true, tokenize: true, return_dict: true }));
+  log(`套用模板完成，輸入欄位 [${Object.keys(inputs).join(', ')}]，input_ids ${inputs.input_ids?.dims?.join('×')}`);
+
+  // sweep=22,120,250,500：載入一次、量多個提示詞長度的 prefill，畫出成長曲線。
+  // 目的是分辨「線性變慢」與「超過某長度就卡死」——兩者的對策完全不同。
+  const SWEEP = (q.get('sweep') || '').split(',').map(Number).filter(n => n > 0);
+  if (SWEEP.length) {
+    for (const n of SWEEP) {
+      const text = FILLER.repeat(Math.max(1, Math.round(n / 45)));
+      const inp = await (proc.apply_chat_template
+        ? proc.apply_chat_template([{ role: 'user', content: text }], { add_generation_prompt: true, tokenize: true, return_dict: true })
+        : tok.apply_chat_template([{ role: 'user', content: text }], { add_generation_prompt: true, tokenize: true, return_dict: true }));
+      const len = Number(inp.input_ids.dims.at(-1));
+      const s0 = performance.now();
+      await model.forward({ ...inp });
+      const ms1 = performance.now() - s0;
+      const s1 = performance.now();
+      await model.forward({ ...inp });
+      const ms2 = performance.now() - s1;
+      log(`prefill ${String(len).padStart(4)} token｜首次 ${(ms1 / 1000).toFixed(2)}s｜穩態 ${(ms2 / 1000).toFixed(2)}s｜每 token ${(ms2 / len).toFixed(1)} ms`);
+    }
+    log('✅ sweep 結束');
+    throw { name: 'SweepDone', message: '（僅跑 sweep，不進行 generate）' };
+  }
+
+  // 先只跑「一次前向」——如果卡在這裡，就與 generate 的迴圈無關，是模型本身跑不動
+  log('嘗試單次 forward…');
+  const f0 = performance.now();
+  const fwd = await model.forward({ ...inputs });
+  const nIn = Number(inputs.input_ids.dims.at(-1));
+  const fms = performance.now() - f0;
+  log(`單次 forward 完成 ${(fms / 1000).toFixed(2)}s（${nIn} token → 每 token ${(fms / nIn).toFixed(1)} ms）`);
+  log('（第一次含 shader 編譯，再跑一次量穩態）');
+  const f1 = performance.now();
+  await model.forward({ ...inputs });
+  const fms2 = performance.now() - f1;
+  log(`第二次 forward ${(fms2 / 1000).toFixed(2)}s（每 token ${(fms2 / nIn).toFixed(1)} ms）`);
+
+  log(`嘗試 generate（max_new_tokens=${MAX}）…`);
+  let n = 0;
+  const streamer = new T.TextStreamer(tok, {
+    skip_prompt: true, skip_special_tokens: true,
+    callback_function: t => { n++; log(`  token 塊 ${n}：${JSON.stringify(t)}`); },
+  });
+  const g0 = performance.now();
+  const out = await model.generate({ ...inputs, max_new_tokens: MAX, do_sample: false, streamer });
+  log(`generate 完成 ${((performance.now() - g0) / 1000).toFixed(1)}s，輸出長度 ${out?.dims?.join('×')}`);
+  log('✅ 全部通過');
+} catch (e) {
+  log(`❌ ${e?.name}: ${e?.message}`);
+  if (e?.stack) log(String(e.stack).split('\n').slice(0, 6).join('\n'));
+}
+</script>
+</body>
+</html>
