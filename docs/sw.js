@@ -10,7 +10,7 @@
 // 注意：離線時只有「介面」打得開。演練需要呼叫 AI 服務商的 API，
 //   那一定要網路。這一點會在畫面上明確告知，不假裝可以離線練習。
 
-const VERSION = 'v25';                 // 改版時遞增，activate 時會清掉舊快取
+const VERSION = 'v26';                 // 改版時遞增，activate 時會清掉舊快取
 const CACHE = `aicoach-${VERSION}`;
 
 // 應用外殼：離線時要能顯示介面與說明
@@ -43,7 +43,9 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
+    // 只清自己的舊快取：同網域的 AI招募教練（zjh0511/ai-recruit-coach）用 recruit-v*，
+    // Cache Storage 整個網域共用，原本「不是現在這版就刪」會連它的離線快取一起刪掉。
+    await Promise.all(keys.filter(k => k.startsWith('aicoach-') && k !== CACHE).map(k => caches.delete(k)));
     await self.clients.claim();
   })());
 });
