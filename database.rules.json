@@ -1,8 +1,20 @@
 {
+  // 這個 Firebase 專案（ai-sales-coach-4b4cb）由兩個 App 共用：
+  //   AI業務教練（zjh0511/ai-sales-coach）→ /users/<uid>
+  //   AI招募教練（zjh0511/ai-recruit-coach）→ /recruit/<uid>
+  // 安全規則一個專案只有一份，兩個 repo 的這個檔案內容必須一模一樣；
+  // 從任何一邊部署，都要包含兩個 App 的規則，否則另一個 App 的同步會失效。
+  //
   // 每個使用者只讀寫得到自己那一份資料。
   // 不要改成 ".read": "auth != null"——那等於全公司的訓練紀錄互相看得到。
   "rules": {
     "users": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      }
+    },
+    "recruit": {
       "$uid": {
         ".read": "$uid === auth.uid",
         ".write": "$uid === auth.uid"
