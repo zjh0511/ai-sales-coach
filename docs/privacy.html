@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>隱私權與使用說明｜AI業務教練</title>
+<link rel="stylesheet" href="style.css">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+<style>
+  body{overflow:auto}
+  .page{max-width:720px;margin:0 auto;padding:20px 20px calc(40px + env(safe-area-inset-bottom));
+    padding-top:calc(20px + env(safe-area-inset-top))}
+  .sec{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
+  .sec h2{font-size:25.5px;margin:0 0 8px}
+  .sec p,.sec ul{margin:8px 0 0}
+  .sec li{margin:4px 0}
+  .sec .warn{background:#1c1809;border-left:3px solid var(--warn);padding:10px 12px;border-radius:8px;margin-top:10px}
+  .back-link{display:inline-block;margin-bottom:6px;color:var(--acc);text-decoration:none}
+  .muted.small{font-size:.8em}
+</style>
+</head>
+<body>
+<!-- 欄位與 engine/meta.js、engine/account.js 的同步範圍對應；程式記錄的東西有變，這一頁要一起改（D049） -->
+<div class="page">
+  <a class="back-link" href="./">‹ 回到 AI業務教練</a>
+  <h1 style="font-size:36px;margin:6px 0 4px">隱私權與使用說明</h1>
+  <p class="muted">AI業務教練由 豪老師 Hao+ 製作，是業務員的<b>自我訓練工具</b>。以下用白話說明它存了什麼、沒存什麼。</p>
+
+  <div class="sec">
+    <h2>1. 存在雲端的資料</h2>
+    <p>登入後，下面這些會存在雲端（Google Firebase），讓你換手機時接得上：</p>
+    <ul>
+      <li><b>帳號</b>：E-mail、顯示名稱（用 Google 登入時還有大頭貼網址）。</li>
+      <li><b>訓練紀錄</b>：每次演練的功能、AI 扮演的虛構客戶簡介、五項評分、教練的總評與下次挑戰。<b>不存對話全文</b>。</li>
+      <li><b>偏好設定</b>：難度、接觸情境、教練聲音、指定的模型。</li>
+      <li><b>來源與裝置統計</b>：你第一次是從哪條連結進來的（例如某支 YouTube 影片）、用過哪幾類裝置（iPhone、Android、電腦等，只記到「哪一天」）、是否加到主畫面。用來決定這個 App 接下來要往哪個方向發展。</li>
+    </ul>
+    <p>雲端資料設定成<b>只有你自己讀寫得到</b>，其他使用者看不到。</p>
+  </div>
+
+  <div class="sec">
+    <h2>2. 只留在你手機上的資料</h2>
+    <ul>
+      <li>你的 <b>AI API 金鑰</b></li>
+      <li>你上傳的<b>教材與保單條款</b></li>
+      <li>理賠諮詢裡記住的<b>客戶稱呼、保單與保額</b>（病況一律不存）</li>
+      <li>和教練的<b>對話</b>（問問其他問題）</li>
+    </ul>
+    <p>這些不會上傳到雲端。同一台裝置換別人登入時，對方也看不到你的這些資料。</p>
+  </div>
+
+  <div class="sec">
+    <h2>3. AI 與語音怎麼處理</h2>
+    <ul>
+      <li>你的演練對話與上傳的內容，會用<b>你自己的金鑰</b>直接送到 Google 的 AI 服務（Gemini）處理，<b>不經過豪老師的伺服器</b>。</li>
+      <li>語音辨識使用手機瀏覽器內建的功能，可能會經過 Apple 或 Google 的語音服務。</li>
+    </ul>
+    <div class="warn">Google 對<b>免費</b>的 AI 服務，可能會用送過去的內容來改善它的產品。
+      所以<b>請不要輸入客戶的真實姓名、電話、身分證號或病歷等個人資料</b>，用代稱與大致情況就夠了。</div>
+  </div>
+
+  <div class="sec">
+    <h2>4. 誰看得到你的資料</h2>
+    <ul>
+      <li><b>你自己</b>：全部。</li>
+      <li><b>App 管理者（豪老師）</b>：可以產生管理報表，內容是第 1 點的雲端資料（帳號、訓練紀錄的評分與摘要、來源與裝置統計），
+        只用來了解使用情況、改善這個 App，<b>不會提供或出售給任何第三方</b>。</li>
+      <li>第 2 點只在你手機上的資料，管理者也看不到。</li>
+    </ul>
+  </div>
+
+  <div class="sec">
+    <h2>5. 刪除你的資料</h2>
+    <ul>
+      <li>在 App 首頁最下方按「<b>刪除我的帳號與資料</b>」，會刪除你的雲端資料、登入帳號，以及這台裝置上屬於你的金鑰、客戶資料、對話與文件。刪除後無法復原。</li>
+      <li>只想清掉訓練紀錄：「我的訓練紀錄」最下方可以清除。</li>
+      <li>需要協助，請聯絡豪老師的 LINE 官方帳號：<a href="https://line.me/R/ti/p/@143vvmgn" target="_blank" rel="noopener">@143vvmgn</a>。</li>
+    </ul>
+  </div>
+
+  <div class="sec">
+    <h2>6. 使用提醒</h2>
+    <ul>
+      <li>AI 產生的客戶、話術、評分與理賠試算<b>僅供練習參考</b>，不是專業意見；實際理賠以保險公司核定為準。</li>
+      <li>App 裡的客戶都是 AI 虛構的人物，示範話術中的公司與商品一律以「○○」代稱。</li>
+      <li>業務員的網路言行請遵守所屬公司與主管機關的規範，不要用來招攬或招募。</li>
+    </ul>
+  </div>
+
+  <p class="muted small">本說明最後更新：2026 年 10 月 22 日。內容有變動時會更新這一頁。</p>
+  <a class="back-link" href="./">‹ 回到 AI業務教練</a>
+</div>
+</body>
+</html>

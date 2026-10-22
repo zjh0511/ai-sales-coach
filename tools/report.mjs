@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { DEVICE_NAMES } from '../docs/engine/meta.js';
 
 const PROJECT = 'ai-sales-coach-4b4cb';
 const args = process.argv.slice(2);
@@ -97,11 +98,36 @@ const summary = [[
   '姓名', 'E-mail', '登入方式', '註冊時間', '最後登入',
   '演練次數', '最後演練', '平均星等',
   ...Object.values(NAMES), '最常練的模式', '目前難度', '指定模型',
+  '首次來源', '使用過的裝置', '加到主畫面',
 ]];
 const detail = [[
   '姓名', 'E-mail', '演練時間', '模式', '客戶',
   ...Object.values(NAMES), '本次平均', '教練總結', '下次挑戰',
 ]];
+
+// ── 來源與裝置統計（D049）────────────────────────────────────
+// 用來決定「要不要上架、先上哪個商店」：每條連結帶來多少人、用什麼裝置、留不留得住。
+// 一個人用過兩類裝置就兩類各算一次（例如 iPhone 和電腦），所以裝置欄加總可能大於人數。
+const NO_SRC = '未標記（舊用戶）';
+const DAY = 864e5;
+const NOW = Date.now();
+const bySrc = new Map();
+function addToSource(src, a, h, devs) {
+  if (!bySrc.has(src)) bySrc.set(src, { n: 0, dev: {}, home: 0, any: 0, w1: 0, w4base: 0, w4: 0 });
+  const g = bySrc.get(src);
+  const born = Number(a.createdAt) || 0;
+  const days = h.map(x => (x.at - born) / DAY);
+  g.n++;
+  for (const [k] of devs) g.dev[k] = (g.dev[k] || 0) + 1;
+  if (devs.some(([, v]) => v?.home)) g.home++;
+  if (h.length) g.any++;
+  if (days.some(d => d >= 0 && d < 7)) g.w1++;                 // 註冊後 7 天內有練習
+  if (born && NOW - born >= 28 * DAY) {                         // 只算已經註冊滿 4 週的人
+    g.w4base++;
+    if (days.some(d => d >= 21 && d < 28)) g.w4++;              // 第 4 週（第 22～28 天）還有練習
+  }
+}
+const pct = (x, n) => (n ? Math.round(x / n * 100) + '%' : '—');
 
 const rows = accounts.map(a => {
   const h = (cloud[a.localId]?.history) || [];
@@ -113,6 +139,10 @@ const rows = accounts.map(a => {
   for (const x of h) modes[x.modeName || MODE[x.mode] || x.mode] = (modes[x.modeName || MODE[x.mode] || x.mode] || 0) + 1;
   const top = Object.entries(modes).sort((x, y) => y[1] - x[1])[0];
   const name = a.displayName || (a.email || '').split('@')[0];
+  const meta = cloud[a.localId]?.meta || {};
+  const devs = Object.entries(meta.devices || {});
+  const srcName = meta.src || NO_SRC;
+  addToSource(srcName, a, h, devs);
 
   summary.push([
     name, a.email, (a.providerUserInfo?.[0]?.providerId === 'google.com' ? 'Google' : 'E-mail'),
@@ -121,6 +151,8 @@ const rows = accounts.map(a => {
     ...Object.keys(NAMES).map(k => per[k]),
     top ? `${top[0]}（${top[1]} 次）` : '', prefs.diff || '',
     (prefs.models || '').replace(/^"|"$/g, ''),
+    srcName, devs.map(([k]) => DEVICE_NAMES[k] || k).join('、'),
+    devs.filter(([, v]) => v?.home).map(([k]) => DEVICE_NAMES[k] || k).join('、'),
   ]);
 
   for (const x of h) {
@@ -143,6 +175,24 @@ if (DETAIL) {
   f2 = path.join(OUT, 'AI業務教練_演練明細.csv');
   fs.writeFileSync(f2, csv(detail));
 }
+const DEV_KEYS = Object.keys(DEVICE_NAMES);
+const srcRows = [[
+  '來源', '註冊人數', ...DEV_KEYS.map(k => DEVICE_NAMES[k]), '加到主畫面', '有練習過',
+  '第 1 週有練習', '註冊滿 4 週的人數', '第 4 週仍在練',
+]];
+const order = [...bySrc.keys()].sort((x, y) => (x === NO_SRC) - (y === NO_SRC) || bySrc.get(y).n - bySrc.get(x).n);
+const total = { n: 0, dev: {}, home: 0, any: 0, w1: 0, w4base: 0, w4: 0 };
+for (const s of order) {
+  const g = bySrc.get(s);
+  srcRows.push([s, g.n, ...DEV_KEYS.map(k => g.dev[k] || 0), pct(g.home, g.n), pct(g.any, g.n),
+    pct(g.w1, g.n), g.w4base, pct(g.w4, g.w4base)]);
+  for (const k of ['n', 'home', 'any', 'w1', 'w4base', 'w4']) total[k] += g[k];
+  for (const k of DEV_KEYS) total.dev[k] = (total.dev[k] || 0) + (g.dev[k] || 0);
+}
+srcRows.push(['合計', total.n, ...DEV_KEYS.map(k => total.dev[k] || 0), pct(total.home, total.n), pct(total.any, total.n),
+  pct(total.w1, total.n), total.w4base, pct(total.w4, total.w4base)]);
+const f3 = path.join(OUT, 'AI業務教練_來源與裝置統計.csv');
+fs.writeFileSync(f3, csv(srcRows));
 
 // ── 畫面摘要 ────────────────────────────────────────────────
 console.log(`\n  註冊人數 ${accounts.length}　·　演練總次數 ${detail.length - 1}\n`);
@@ -156,7 +206,13 @@ if (orphans.length) {
   for (const u of orphans) console.log(`     ${u}`);
   console.log('     要清掉的話：firebase database:remove /users/<uid> --project ' + PROJECT);
 }
-console.log(`\n  已寫出：\n    ${f1}${f2 ? '\n    ' + f2 : ''}`);
+console.log('\n  來源與裝置：');
+for (const s of order) {
+  const g = bySrc.get(s);
+  const d = DEV_KEYS.filter(k => g.dev[k]).map(k => `${DEVICE_NAMES[k]} ${g.dev[k]}`).join('、') || '—';
+  console.log(`    ${s}：${g.n} 人（${d}）　第 1 週有練習 ${pct(g.w1, g.n)}`);
+}
+console.log(`\n  已寫出：\n    ${f1}${f2 ? '\n    ' + f2 : ''}\n    ${f3}`);
 console.log(DRIVE && !argOf('--out')
   ? '  （在 Google 雲端硬碟資料夾裡，會自動同步上雲端）\n'
   : '  提示：裝了 Google 雲端硬碟桌面版之後這支腳本會自動寫進去，\n'

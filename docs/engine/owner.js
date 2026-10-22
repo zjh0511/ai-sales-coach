@@ -12,6 +12,12 @@ export const APIKEY = 'aicoach.apikey';
 export const TTSQ = 'aicoach.ttsq';
 export const CLIENTS = 'aicoach.clients';
 export const PERSONAL = [HISTORY, 'aicoach.prefs', 'aicoach.models', APIKEY, CLIENTS, 'aicoach.chat', TTSQ];
+// 刪除帳號時要清掉的「這個人在這台裝置上的東西」：上面那些，加上之後才新增的個人項目
+export const PERSONAL_ALL = [...PERSONAL, 'aicoach.meta'];
+export function wipe(storage, uid) {
+  for (const k of PERSONAL_ALL) storage.removeItem(scopedKey(k, uid));
+  storage.removeItem(`aicoach.legacy.no#${uid}`);
+}
 
 // 有帳號功能、但目前沒有人登入時用的「無主」空間：登出後殘留的寫入不會落進任何人的資料，
 // 也不會被誤認成更新前的舊資料。

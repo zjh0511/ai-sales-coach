@@ -6,6 +6,7 @@
 // 同步範圍是刻意收窄的（使用者決定）：只有訓練紀錄與偏好設定。
 // **API 金鑰與上傳的教材／條款一律不上雲端**，只留在這台裝置。
 import { FB } from '../firebase-config.js';
+import { mergeMeta } from './meta.js';
 
 const IDP = 'https://identitytoolkit.googleapis.com/v1/accounts:';
 const TOKEN = 'https://securetoken.googleapis.com/v1/token';
@@ -40,6 +41,7 @@ const ERR = {
   TOO_MANY_ATTEMPTS_TRY_LATER: '嘗試太多次了，請等幾分鐘再試',
   OPERATION_NOT_ALLOWED: '這個登入方式還沒在 Firebase 後台開啟',
   USER_DISABLED: '這個帳號已被停用',
+  CREDENTIAL_TOO_OLD_LOGIN_AGAIN: '為了安全，請先重新登入一次再刪除',
 };
 const friendly = m => {
   for (const k in ERR) if (m.startsWith(k)) return ERR[k];
@@ -67,6 +69,7 @@ function adopt(j) {
     idToken: j.idToken || j.id_token,
     refreshToken: j.refreshToken || j.refresh_token,
     expAt: Date.now() + (Number(j.expiresIn || j.expires_in || 3600) - 60) * 1000,
+    signedInAt: Date.now(),      // 刪除帳號要「剛登入過」（Firebase 規定），用這個先判斷
   };
   save();
   return user();
@@ -215,6 +218,8 @@ export async function push(data, expectUid) {
 // - 訓練紀錄用 at（時間戳）當識別碼取「聯集」。用覆蓋的話，
 //   在手機練完、電腦一開就會把手機那幾筆整批蓋掉。
 // - 偏好設定比 updatedAt，晚的贏。同一個人不會真的同時在兩台裝置改設定。
+// - 來源與裝置統計（meta）見 meta.js 的 mergeMeta。一定要放進合併結果：push 是整包 PUT，
+//   沒放進來的欄位會被雲端整個蓋掉。
 export function merge(local, remote) {
   const byAt = new Map();
   for (const r of [...(remote?.history || []), ...(local?.history || [])]) if (r?.at) byAt.set(r.at, r);
@@ -222,5 +227,35 @@ export function merge(local, remote) {
   return {
     history: [...byAt.values()].sort((a, b) => b.at - a.at).slice(0, 100),
     prefs: (lp.updatedAt || 0) >= (rp.updatedAt || 0) ? lp : rp,
+    meta: mergeMeta(local?.meta, remote?.meta),
   };
+}
+
+// ── 刪除帳號與雲端資料（使用者 2026-10-22 決定提供，D049）──────────
+// 這個 Firebase 專案也給「AI招募教練」用（/recruit/<uid>），兩個 App 共用同一份登入帳號。
+// 所以：一定刪掉 AI業務教練的雲端資料；登入帳號只有在「AI招募教練那邊沒有資料」時才一起刪，
+// 否則會讓使用者在另一個 App 莫名其妙登不進去。
+// Firebase 規定刪除登入帳號前要「最近登入過」，超過 5 分鐘就先請他重新登入，免得刪到一半失敗。
+const RECENT_MS = 5 * 60 * 1000;
+export const recentlySignedIn = () => !!A?.signedInAt && Date.now() - A.signedInAt < RECENT_MS;
+
+export async function deleteAccount() {
+  if (!A) throw new Error('目前沒有登入');
+  if (!recentlySignedIn()) { const e = new Error('為了安全，刪除前要先重新登入一次'); e.relogin = true; throw e; }
+  const t = await token();
+  if (!t) throw new Error('連不上雲端，請確認網路後再試');
+  const base = FB.dbUrl.replace(/\/+$/, '');
+  const r = await fetch(`${base}/users/${A.uid}.json?auth=${t}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('刪除雲端資料失敗（HTTP ' + r.status + '），請稍後再試');
+  let other = false;
+  try {
+    const o = await fetch(`${base}/recruit/${A.uid}.json?auth=${t}&shallow=true`);
+    other = o.ok && (await o.json()) != null;
+  } catch { other = true; }          // 查不到就當有——寧可保留帳號，也不要誤刪另一個 App 的登入
+  if (!other) {
+    try { await idp('delete', { idToken: t }); }
+    catch (e) { throw new Error('雲端資料已刪除，但登入帳號沒有刪成功（' + e.message + '）。請重新登入後再按一次'); }
+  }
+  signOut();
+  return { accountDeleted: !other };
 }

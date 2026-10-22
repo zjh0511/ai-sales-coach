@@ -4,7 +4,8 @@ import { api, providers, restore, onModelEvent, disconnect } from './engine/api.
 import { startOpenRouter, oauthSupported } from './engine/oauth.js';
 import * as acct from './engine/account.js';
 import * as own from './engine/owner.js';
-import { setOwner, legacyDocCount, adoptLegacyDocs } from './engine/store.js';
+import { setOwner, legacyDocCount, adoptLegacyDocs, deleteMyDocs } from './engine/store.js';
+import * as meta from './engine/meta.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
@@ -14,6 +15,10 @@ const LS = 'aicoach.history';
 // 一律經過 my.get／set／del，不要直接用 localStorage 讀寫這幾項。
 const uid = () => (acct.configured() ? acct.user()?.uid || own.NOBODY : null);
 const my = own.scoped(localStorage, uid);
+
+// 從帶 ?src= 的連結進來（YouTube 說明欄、QR Code、LINE…）：記下來源，並從網址拿掉（見 engine/meta.js）
+try { const clean = meta.captureSrc(location.href, localStorage); if (clean) history.replaceState(history.state, '', clean); }
+catch { /* 網址解析失敗就不記，不影響使用 */ }
 
 const S = {
   fn: 'call',            // 目前功能：pain | call | needs | product | claim | chat
@@ -1482,7 +1487,23 @@ function renderHistory() {
     b.append(c);
   }
   const clr = el('button', 'link', '清除所有紀錄');
-  clr.onclick = () => { if (confirm('確定要刪除全部訓練紀錄？')) { my.del(LS); renderHistory(); } };
+  // 原本只刪本機：同步是「取聯集」，下一次同步雲端的紀錄就全部回來了，等於沒刪（2026-10-22 發現）。
+  // 現在連雲端一起清：拉下雲端資料、合併後把紀錄清空、整包寫回去。
+  clr.onclick = async () => {
+    if (!confirm('確定要刪除全部訓練紀錄？雲端備份也會一起刪除。')) return;
+    my.del(LS);
+    if (acct.configured() && acct.user()) {
+      try {
+        const who = acct.user().uid, remote = await acct.pull();
+        if (!remote) throw new Error('目前連不上雲端，請有網路時再清一次');
+        if (acct.user()?.uid === who) {
+          const merged = { ...acct.merge(bundle(), remote), history: [] };
+          await acct.push(merged, who);
+        }
+      } catch (e) { toast('這台裝置的紀錄已清除，但雲端還沒清掉：' + e.message, 6000); }
+    }
+    renderHistory();
+  };
   b.append(clr);
 }
 
@@ -1504,6 +1525,47 @@ function switchOwner() {
   try { tts.state = ttsStore.load(); } catch { tts.state = {}; }
   S.claim = null; S.doc = null; S.lastCustomer = null;
 }
+
+// 記下「這個人用了這台裝置」與他第一次是從哪條連結來的（D049，欄位與隱私考量見 engine/meta.js）。
+// 要在同步之後呼叫：來源只歸給「還沒有任何訓練紀錄的新帳號」——
+// 已經在用的同事好奇點了影片連結，不能被算成影片帶來的新用戶；而換新手機的舊用戶，要等雲端紀錄拉下來才看得出是舊用戶。
+function recordUse() {
+  if (!acct.user()) return;
+  let cur = null, records = 0;
+  try { cur = JSON.parse(my.get(meta.META_KEY) || 'null'); } catch { /* 壞資料當沒有 */ }
+  try { records = JSON.parse(my.get(LS) || '[]').length; } catch { /* 同上 */ }
+  const pending = meta.pendingSrc(localStorage);
+  const { meta: next, changed } = meta.touch(cur, {
+    device: meta.deviceOf(navigator.userAgent, navigator.platform, navigator.maxTouchPoints),
+    home: standalone(),
+    src: records ? null : pending,
+  });
+  // 這台裝置記下的來源只用一次：歸給了這個人，或這個人本來就有來源／是舊用戶，都清掉，
+  // 免得之後換別人在這台裝置登入時被算到他頭上
+  if (pending) localStorage.removeItem(meta.SRC_KEY);
+  if (changed) { my.set(meta.META_KEY, JSON.stringify(next)); syncSoon(); }
+}
+
+// 刪除帳號：雲端資料、這台裝置上屬於他的東西（紀錄、金鑰、理賠客戶、教練對話、上傳的文件）全部清掉。
+$('#home-delete').onclick = async () => {
+  if (!acct.user()) return;
+  if (!acct.recentlySignedIn()) {
+    if (!confirm('為了安全，刪除帳號前要先重新登入一次。\n\n按「確定」登出，重新登入後再到首頁最下方按一次「刪除我的帳號與資料」。')) return;
+    my.del(AKEY_KEY); acct.signOut(); disconnect(); switchOwner(); updateWho(); initAuth(); return show('auth');
+  }
+  if (!confirm('確定要刪除你的帳號與所有資料嗎？\n\n會刪除：雲端的訓練紀錄與設定，以及這台裝置上的金鑰、理賠客戶、教練對話、上傳的文件。\n\n刪除後無法復原。')) return;
+  if (prompt('最後確認：請輸入「刪除」兩個字') !== '刪除') return toast('沒有刪除');
+  const who = acct.user().uid;
+  try {
+    clearTimeout(syncTimer);
+    const { accountDeleted } = await acct.deleteAccount();   // 雲端刪成功才動本機——網路失敗時不會只刪一半
+    await deleteMyDocs().catch(() => {});            // 文件歸屬還停在這個人身上（switchOwner 之前）
+    own.wipe(localStorage, who);
+    disconnect(); switchOwner(); updateWho(); initAuth(); show('auth');
+    alert(accountDeleted ? '已刪除你的帳號與所有資料。'
+      : '已刪除你在 AI業務教練的所有資料。\n你的登入帳號也用在「AI招募教練」，所以帳號本身保留。');
+  } catch (e) { toast(e.message, 6000); }
+};
 
 // 更新前的資料存在固定鍵名、沒有歸屬任何帳號（見 engine/owner.js）。使用者 2026-10-07 決定的規則：
 //   ask=false：更新後第一次打開時已經有人登入 → 直接歸給他（多半就是他自己的手機），金鑰一起沿用
@@ -1535,8 +1597,11 @@ function bundle() {
   let history = [];
   try { history = JSON.parse(my.get(LS) || '[]'); } catch { /* 壞資料當空的 */ }
   const p = prefs();
+  let m = {};
+  try { m = JSON.parse(my.get(meta.META_KEY) || 'null') || {}; } catch { /* 壞資料當空的 */ }
   return {
     history,
+    meta: m,
     prefs: {
       diff: p.diff || '', ctx: p.ctx || '', coach: p.coach || '',
       provider: localStorage.getItem(PROV_KEY) || '',
@@ -1548,6 +1613,7 @@ function bundle() {
 
 function applyBundle(b) {
   try { my.set(LS, JSON.stringify((b.history || []).slice(0, 50))); } catch { /* 容量滿 */ }
+  if (b.meta) my.set(meta.META_KEY, JSON.stringify(b.meta));
   const p = b.prefs || {};
   // 模型指定只在「服務商相同」時才套用——別家的模型名稱放進來是無效的，
   // 會讓使用者在新裝置上看到一個根本不存在的模型。
@@ -1611,6 +1677,7 @@ function updateWho() {
   const u = acct.user();
   const line = $('#home-who');
   $('#home-signout').hidden = !u;
+  $('#home-delete').hidden = !u;
   line.hidden = !u;
   syncBadge = null;
   if (!u) return;
@@ -1629,6 +1696,7 @@ async function afterAuth() {
   switchOwner();
   updateWho();
   await syncNow(true);          // 先把雲端資料拉下來，再進金鑰流程（模型指定才會生效）
+  recordUse();                  // 雲端紀錄拉下來後才判斷得出是不是新用戶
   await initLogin();
   updateAccount(); syncInstallBtn(); handleShortcut();
 }
@@ -1922,7 +1990,7 @@ async function boot() {
     initAuth();
     return show('auth');
   }
-  if (acct.user()) { updateWho(); syncNow(); }
+  if (acct.user()) { updateWho(); syncNow().then(recordUse); }
   await initLogin();
   updateAccount(); syncInstallBtn(); handleShortcut();
 }

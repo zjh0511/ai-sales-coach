@@ -60,6 +60,11 @@ export async function getDocById(id) {
   return mine(d) ? d : null;
 }
 
+// 刪除帳號時：這台裝置上屬於目前這個帳號的文件全部刪掉
+export async function deleteMyDocs() {
+  for (const d of await allDocs()) await delDoc(d.id);
+}
+
 // 更新前上傳、還沒有 owner 的文件
 export async function legacyDocCount() {
   return (await everything()).filter(d => !d.owner).length;

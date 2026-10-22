@@ -16,7 +16,7 @@ const CACHE = `aicoach-${VERSION}`;
 // 應用外殼：離線時要能顯示介面與說明
 const SHELL = [
   './', './index.html', './style.css', './app.js', './voice.js',
-  './manifest.webmanifest', './guide.html',
+  './manifest.webmanifest', './guide.html', './privacy.html',
   // 只預快取小尺寸圖標。512 的兩張加起來 600KB，而它們只有
   // 「加到主畫面」時才會被系統抓取——放進預快取等於讓每個人
   // 第一次開啟就多下載 600KB。network-first 之下它們用到時自然會被快取。
@@ -28,7 +28,7 @@ const SHELL = [
   './engine/tts.js',
   './engine/api.js', './engine/gateway.js', './engine/prompts.js',
   './engine/session.js', './engine/advisor.js', './engine/knowledge.js',
-  './engine/docx.js', './engine/store.js', './engine/owner.js', './engine/compliance.js', './engine/oauth.js',
+  './engine/docx.js', './engine/store.js', './engine/owner.js', './engine/meta.js', './engine/compliance.js', './engine/oauth.js',
 ];
 
 self.addEventListener('install', e => {

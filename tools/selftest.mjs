@@ -903,6 +903,68 @@ if (run(1)) {
     for (const d of back) if (d) await ST.putDoc(d);
     ok((await ST.allDocs()).map(d => d.id).join() === before.join(), '測試後文件狀態還原');
   }
+
+  // 來源與裝置統計（D049）。這些數字要拿來決定「要不要上架、先上哪個商店」——
+  // 記錯了不會報錯，只會讓決策依據默默失真。
+  console.log('=== 1s. 來源與裝置統計 ===');
+  {
+    const M = await import('../docs/engine/meta.js');
+    const O = await import('../docs/engine/owner.js');
+    const mk = () => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; };
+    const UA = {
+      iphone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
+      ipadAsMac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',
+      androidPhone: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/129.0 Mobile Safari/537.36',
+      androidTab: 'Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 Chrome/129.0 Safari/537.36',
+      win: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/129.0 Safari/537.36',
+    };
+    ok(M.deviceOf(UA.iphone) === 'iphone', '認得 iPhone');
+    ok(M.deviceOf(UA.ipadAsMac, 'MacIntel', 5) === 'ipad', 'iPad 自稱 Mac：靠觸控點數認出是 iPad');
+    ok(M.deviceOf(UA.ipadAsMac, 'MacIntel', 0) === 'mac', '真的 Mac（沒有觸控）不會被當成 iPad');
+    ok(M.deviceOf(UA.androidPhone) === 'android-phone' && M.deviceOf(UA.androidTab) === 'android-tablet', 'Android 分得出手機與平板');
+    ok(M.deviceOf(UA.win) === 'windows', '認得 Windows 電腦');
+
+    let s = mk();
+    const clean = M.captureSrc('https://x.io/app/?src=yt-ep3-qr&go=call#top', s, Date.UTC(2026, 10, 15, 4));
+    ok(clean === '/app/?go=call#top', '來源從網址拿掉，其他參數保留', clean);
+    ok(M.pendingSrc(s)?.src === 'yt-ep3-qr' && M.pendingSrc(s)?.at === '2026-11-15', '來源記在這台裝置上（只記到哪一天）');
+    M.captureSrc('https://x.io/app/?src=line', s);
+    ok(M.pendingSrc(s).src === 'yt-ep3-qr', '同一台裝置之後從別的連結進來，不覆蓋第一次的來源');
+    s = mk(); M.captureSrc('https://x.io/?src=<script>alert(1)</script>', s);
+    ok(M.pendingSrc(s) === null, '亂塞的來源不收');
+    ok(M.captureSrc('https://x.io/app/?go=call', mk()) === null, '網址沒有來源時不動網址');
+
+    const day1 = Date.UTC(2026, 10, 15, 4), day2 = Date.UTC(2026, 10, 20, 4);
+    let r = M.touch(null, { device: 'iphone', home: false, src: { src: 'yt-ep3', at: '2026-11-15' }, now: day1 });
+    ok(r.changed && r.meta.src === 'yt-ep3' && r.meta.devices.iphone.first === '2026-11-15', '新用戶：記下來源與第一次用的裝置');
+    r = M.touch(r.meta, { device: 'iphone', home: false, now: day1 });
+    ok(!r.changed, '同一天同一台裝置再打開：不算變動（不用每次同步）');
+    r = M.touch(r.meta, { device: 'iphone', home: true, src: { src: 'line', at: '2026-11-20' }, now: day2 });
+    ok(r.changed && r.meta.src === 'yt-ep3' && r.meta.devices.iphone.home && r.meta.devices.iphone.last === '2026-11-20',
+      '之後加到主畫面：記下來；首次來源不會被後來的連結蓋掉');
+
+    const phone = { src: 'yt-ep3', srcAt: '2026-11-15', devices: { iphone: { first: '2026-11-15', last: '2026-11-20', home: true } } };
+    const pc = { src: 'line', srcAt: '2026-11-18', devices: { windows: { first: '2026-11-18', last: '2026-11-18', home: false },
+      iphone: { first: '2026-11-10', last: '2026-11-12', home: false } } };
+    const mm = M.mergeMeta(pc, phone);
+    ok(mm.src === 'yt-ep3', '兩台裝置的來源不同：比較早的那一個贏');
+    ok(Object.keys(mm.devices).sort().join() === 'iphone,windows', '裝置取聯集');
+    ok(mm.devices.iphone.first === '2026-11-10' && mm.devices.iphone.last === '2026-11-20' && mm.devices.iphone.home,
+      '同一類裝置：第一次取早、最後一次取晚、加到主畫面任一為真');
+    const full = merge({ history: [{ at: 1 }], meta: phone }, { history: [{ at: 2 }] });
+    ok(full.meta?.src === 'yt-ep3' && full.history.length === 2,
+      '同步合併帶著統計——雲端是整包覆寫，漏掉的話統計會被清掉');
+    ok(merge({ history: [] }, { meta: phone }).meta.src === 'yt-ep3', '本機還沒有統計時，保留雲端的');
+
+    s = mk();
+    s.setItem(O.scopedKey('aicoach.history', 'u1'), '[]'); s.setItem(O.scopedKey('aicoach.meta', 'u1'), '{}');
+    s.setItem(O.scopedKey('aicoach.apikey', 'u1'), 'k'); s.setItem(O.scopedKey('aicoach.history', 'u2'), '[1]');
+    s.setItem('aicoach.legacy.no#u1', '1');
+    O.wipe(s, 'u1');
+    ok(s.getItem(O.scopedKey('aicoach.meta', 'u1')) === null && s.getItem(O.scopedKey('aicoach.apikey', 'u1')) === null
+      && s.getItem('aicoach.legacy.no#u1') === null, '刪除帳號：這個人在這台裝置上的東西都清掉');
+    ok(s.getItem(O.scopedKey('aicoach.history', 'u2')) === '[1]', '刪除帳號：同一台裝置上別人的資料不受影響');
+  }
 }
 
 const models = await gw.init();

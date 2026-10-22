@@ -124,6 +124,10 @@ ul,ol{margin:6px 0;padding-left:20px} li{margin:4px 0}
 /* 六大功能新增 */
 .two-links{display:flex;gap:10px;margin-top:6px}
 .two-links .link{flex:1}
+.fine-links{display:flex;flex-direction:column;align-items:center;gap:2px;margin:22px 0 6px;font-size:.8em}
+.fine-links a{color:var(--muted)}
+.fine-links .link{width:auto;padding:8px 0;font-size:inherit}
+.link.danger{color:var(--bad)}
 .card.sm{padding:12px}
 .badge{background:#123021;border:1px solid #1f5c3a;color:#4ade80;border-radius:999px;padding:5px 11px;font-size:18px;margin-right:8px}
 .pt{border-left:3px solid var(--acc);padding-left:12px;margin:14px 0}
