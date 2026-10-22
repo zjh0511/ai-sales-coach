@@ -129,7 +129,9 @@ function addToSource(src, a, h, devs) {
 }
 const pct = (x, n) => (n ? Math.round(x / n * 100) + '%' : '—');
 
-const rows = accounts.map(a => {
+// 只列「在 AI業務教練有資料」的人：登入帳號和 AI招募教練共用，只用招募教練、或刪除了業務教練資料（帳號因招募教練保留）的人不算
+const mine = accounts.filter(a => cloud[a.localId]);
+const rows = mine.map(a => {
   const h = (cloud[a.localId]?.history) || [];
   const prefs = cloud[a.localId]?.prefs || {};
   const per = {};
@@ -195,7 +197,7 @@ const f3 = path.join(OUT, 'AI業務教練_來源與裝置統計.csv');
 fs.writeFileSync(f3, csv(srcRows));
 
 // ── 畫面摘要 ────────────────────────────────────────────────
-console.log(`\n  註冊人數 ${accounts.length}　·　演練總次數 ${detail.length - 1}\n`);
+console.log(`\n  AI業務教練使用者 ${mine.length} 人（登入帳號共 ${accounts.length} 個，其餘只用招募教練或已刪除資料）　·　演練總次數 ${detail.length - 1}\n`);
 const w = Math.max(6, ...rows.map(r => [...r.name].length * 2));
 for (const r of rows.sort((a, b) => b.sessions - a.sessions)) {
   console.log(`  ${r.name.padEnd(w - ([...r.name].length))}  ${String(r.sessions).padStart(3)} 次   平均 ${r.avg || '—'} 星   ${r.email}`);

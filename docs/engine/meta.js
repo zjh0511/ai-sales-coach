@@ -6,6 +6,7 @@
 //
 // 刻意不記：IP、瀏覽器指紋、精確時間（只記到「日」）、對話內容、客戶資料、金鑰、文件。
 // 隱私說明見 privacy.html——這裡的欄位有變，那一頁要一起改。
+// AI招募教練（Ai_Recruit_Coach）有一份相同的程式，只差鍵名用 recruit.（兩個 App 同網域、localStorage 共用），兩邊要一起改。
 
 export const SRC_KEY = 'aicoach.src';          // 這台裝置第一次帶著 ?src= 進來的紀錄（還沒歸給任何帳號）
 export const META_KEY = 'aicoach.meta';        // 個人的統計（依帳號分開，見 owner.js）
